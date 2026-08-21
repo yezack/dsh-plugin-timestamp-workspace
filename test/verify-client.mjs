@@ -63,6 +63,8 @@ if (problems.length) {
 // apply() with a stubbed ctx: both slot families should be injected.
 const injectedSlots = []
 const registeredSections = []
+const calls = { originalStartSession: [], clear: 0 }
+const originalStartSession = (workspaceId) => { calls.originalStartSession.push(workspaceId) }
 const ctxStub = {
   slots: {
     inject(name, fn) {
@@ -75,6 +77,8 @@ const ctxStub = {
     },
   },
   workspaces: {
+    startSession: originalStartSession,
+    sessions: { clear: () => { calls.clear += 1 } },
     pickDirectory: async () => '/tmp/root',
     createDirectory: async (root, name) => `${root}/${name}`,
   },
@@ -95,4 +99,29 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, directoryFlow wired, settings.section "timestamp-workspace" registered with component')
+// startSession shadowing: a parameterless New Session must clear into the
+// workspace-less view (host default would inherit the recent folder), while
+// an explicit workspace target must still run the host logic.
+if (typeof ctxStub.workspaces.startSession !== 'function' || ctxStub.workspaces.startSession === originalStartSession) {
+  console.error('FAIL: workspaces.startSession was not shadowed')
+  process.exit(1)
+}
+ctxStub.workspaces.startSession()
+ctxStub.workspaces.startSession('ws-1')
+if (calls.clear !== 1) {
+  console.error(`FAIL: parameterless startSession did not clear exactly once (clear=${calls.clear})`)
+  process.exit(1)
+}
+if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !== 'ws-1') {
+  console.error(`FAIL: explicit startSession did not forward to the host logic (got ${JSON.stringify(calls.originalStartSession)})`)
+  process.exit(1)
+}
+// Idempotent: a second apply() must not wrap the method again.
+mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
+ctxStub.workspaces.startSession()
+if (calls.clear !== 2) {
+  console.error(`FAIL: re-apply double-wrapped startSession (clear=${calls.clear})`)
+  process.exit(1)
+}
+
+console.log('PASS: loader id OK, exports OK, directoryFlow wired, settings.section "timestamp-workspace" registered with component, startSession shadowed (no-arg clears, explicit forwards, re-apply idempotent)')

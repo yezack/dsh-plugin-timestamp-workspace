@@ -43,6 +43,17 @@ async function updateSettings(rootDirectory: string): Promise<void> {
 // through the apply-time context captured here.
 let runtime: ClientContext | null = null
 
+// The host resolves a parameterless startSession (top-bar / hero "new
+// conversation") as `currentWorkspaceId ?? recentWorkspaceId`, so a fresh
+// conversation silently inherits the last-used folder. That is a host
+// default no slot can reach, so we shadow the method on the live service
+// object: a parameterless New Session now clears into the workspace-less
+// New Session view (the user picks a folder when they actually want one).
+// Explicit workspace targets (per-workspace New Session in the sidebar)
+// still run the original host logic. Guarded by a module-level flag so a
+// hot reload (apply re-run) does not double-wrap.
+let originalStartSession: ((workspaceId?: string) => void) | null = null
+
 function TimestampSettingsSection(props: { close?: () => void }) {
   const [root, setRoot] = React.useState<string>('')
   const [loading, setLoading] = React.useState<boolean>(true)
@@ -149,6 +160,20 @@ function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<strin
 
 export function apply(ctx: ClientContext, config: Config): void {
   runtime = ctx
+  const workspaces = ctx.workspaces as unknown as {
+    startSession?: (workspaceId?: string) => void
+    sessions?: { clear?: () => void }
+  } | undefined
+  if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
+    originalStartSession = workspaces.startSession.bind(workspaces)
+    workspaces.startSession = (workspaceId?: string): void => {
+      if (workspaceId === undefined) {
+        try { workspaces.sessions?.clear?.() } catch { /* keep the current view */ }
+        return
+      }
+      originalStartSession!(workspaceId)
+    }
+  }
   const occupant = (owner: DirectoryFlowOwnerProps) => React.createElement(Flow, { owner, pick: () => ctx.workspaces.pickDirectory(), create: (root, name) => ctx.workspaces.createDirectory(root, name), root: config.rootDirectory })
   const injected = () => ({})
   // The host (x6) already holds a priority-0 registration on both single
