@@ -12,7 +12,7 @@
     },
     "./client": {
       "types": "./lib/client.d.mts",
-      "default": "./lib/client.mjs"
+      "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
   },
@@ -37,7 +37,7 @@
     "@deepseek-ai/dsh-client-ui-workspace": "^0.1.0-rc.6"
   },
   "scripts": {
-    "bundle": "tsdown",
+    "bundle": "tsdown && node scripts/build-client.mjs",
     "watch": "tsdown --watch"
   },
   "files": [

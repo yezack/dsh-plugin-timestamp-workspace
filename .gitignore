@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# build artifacts (lib/ is committed; dist/ is a local scratch output)
+dist/
+*.tgz
+
+# debugging / verification scratch files
+*.log
+*.err
+patch-dump.txt
+patch-errors.txt
+isolated-index*.html
+served-client.mjs
+verify.patch.yml
+web-verify*

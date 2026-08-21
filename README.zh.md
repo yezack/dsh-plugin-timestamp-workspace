@@ -19,10 +19,3 @@ DeepSeek Harness 工作区插件：用户可以选择已有目录，也可以不
 ```
 
 路径必须是 Host 可访问的已存在目录。
-## 从 GitHub 安装
-
-```powershell
-dsh plugin --profile web add github:yezack/dsh-plugin-timestamp-workspace
-```
-
-安装后，在 profile 的 patch 配置中设置 `rootDirectory`。该目录必须已经存在，并且 Host 可访问。
