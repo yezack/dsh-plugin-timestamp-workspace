@@ -3,7 +3,8 @@
  * 1. bundle executed as a classic script registers the loader entry,
  * 2. loader id === package name,
  * 3. factory() yields module.exports with name / inject / apply,
- * 4. apply(ctx) wires the slots without throwing (stubbed ctx).
+ * 4. apply(ctx) wires the slots without throwing (stubbed ctx),
+ * 5. the settings.section registration is present with a component.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -20,7 +21,12 @@ const windowObj = {
   },
 }
 
-const reactStub = { createElement: () => ({}), useState: () => [], createContext: () => ({}) }
+const reactStub = {
+  createElement: () => ({}),
+  useState: () => [],
+  useEffect: () => {},
+  createContext: () => ({}),
+}
 const requireStub = (spec) => {
   if (spec === 'react') return reactStub
   throw new Error(`unexpected require('${spec}')`)
@@ -54,12 +60,19 @@ if (problems.length) {
   process.exit(1)
 }
 
-// apply() with a stubbed ctx: slots.inject should be invoked.
-let injected = 0
+// apply() with a stubbed ctx: both slot families should be injected.
+const injectedSlots = []
+const registeredSections = []
 const ctxStub = {
   slots: {
-    inject(name, fn) { injected++; if (typeof fn === 'function') fn() },
-    register() { return () => {} },
+    inject(name, fn) {
+      injectedSlots.push(name)
+      if (typeof fn === 'function') fn()
+    },
+    register(desc, component) {
+      if (desc && desc.name === 'settings.section') registeredSections.push({ id: desc.id, label: desc.label(), hasComponent: typeof component === 'function' })
+      return () => {}
+    },
   },
   workspaces: {
     pickDirectory: async () => '/tmp/root',
@@ -67,9 +80,19 @@ const ctxStub = {
   },
 }
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
-if (injected < 1) {
-  console.error('FAIL: apply() did not inject any slot')
+
+if (!injectedSlots.includes('conversation.hero.workspace.directoryFlow')) {
+  console.error(`FAIL: directoryFlow slot not injected (got ${JSON.stringify(injectedSlots)})`)
+  process.exit(1)
+}
+const section = registeredSections.find((s) => s.id === 'timestamp-workspace')
+if (!section) {
+  console.error(`FAIL: settings.section "timestamp-workspace" not registered (got ${JSON.stringify(registeredSections)})`)
+  process.exit(1)
+}
+if (!section.hasComponent) {
+  console.error('FAIL: settings.section registered without a render component')
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports { name, inject, apply, formatTimestamp, createTimestampWorkspace } OK, apply() wired slots OK')
+console.log('PASS: loader id OK, exports OK, directoryFlow wired, settings.section "timestamp-workspace" registered with component')
