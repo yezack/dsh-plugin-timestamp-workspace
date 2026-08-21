@@ -54,6 +54,41 @@ let runtime: ClientContext | null = null
 // hot reload (apply re-run) does not double-wrap.
 let originalStartSession: ((workspaceId?: string) => void) | null = null
 
+// The host's startInitialSelection runs synchronously inside the runtime
+// apply — before this plugin — and subscribes to the workspace projection,
+// waiting for the first ready baseline. Its only trigger is the projected
+// recentWorkspaceId: booting with no restored current session auto-connects
+// the last-used workspace, with no reachable handle to cancel that pending
+// reconcile. So we shadow the projection instead: masking recentWorkspaceId
+// on the very first ready baseline makes the reconcile settle as "done"
+// without connecting, landing startup on the workspace-less New Session
+// view — consistent with the startSession policy above. One-shot (the
+// reconcile settles exactly once), guarded so hot reload does not re-wrap.
+let startupMaskInstalled = false
+function suppressStartupAutoSelection(workspaces: unknown): void {
+  if (startupMaskInstalled) return
+  const ws = workspaces as {
+    list?: { set?: (next: Record<string, unknown>) => unknown }
+    sessions?: { list?: { getSnapshot?: () => { current?: unknown } } }
+  } | undefined
+  const list = ws?.list
+  const set = list?.set
+  const sessionsList = ws?.sessions?.list
+  if (!list || typeof set !== 'function' || !sessionsList || typeof sessionsList.getSnapshot !== 'function') return
+  startupMaskInstalled = true
+  list.set = (next: Record<string, unknown>): unknown => {
+    if (next.baselinesReady === true) {
+      // One-shot: the startup reconcile settles on the first ready
+      // projection, so restore the original setter right away.
+      list.set = set
+      if (sessionsList.getSnapshot().current === undefined && next.recentWorkspaceId !== undefined) {
+        next = { ...next, recentWorkspaceId: undefined }
+      }
+    }
+    return set(next)
+  }
+}
+
 function TimestampSettingsSection(props: { close?: () => void }) {
   const [root, setRoot] = React.useState<string>('')
   const [loading, setLoading] = React.useState<boolean>(true)
@@ -174,6 +209,7 @@ export function apply(ctx: ClientContext, config: Config): void {
       originalStartSession!(workspaceId)
     }
   }
+  suppressStartupAutoSelection(ctx.workspaces)
   const occupant = (owner: DirectoryFlowOwnerProps) => React.createElement(Flow, { owner, pick: () => ctx.workspaces.pickDirectory(), create: (root, name) => ctx.workspaces.createDirectory(root, name), root: config.rootDirectory })
   const injected = () => ({})
   // The host (x6) already holds a priority-0 registration on both single

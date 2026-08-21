@@ -124,4 +124,45 @@ if (calls.clear !== 2) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, directoryFlow wired, settings.section "timestamp-workspace" registered with component, startSession shadowed (no-arg clears, explicit forwards, re-apply idempotent)')
+// Startup auto-selection suppression: the host startInitialSelection
+// reconcile only connects when the first ready projection carries a
+// recentWorkspaceId and no current session is restored. The mask must
+// blank recentWorkspaceId on that first ready projection, then restore
+// the original setter (one-shot) so later projections pass through.
+const setCalls = []
+let storeState = { baselinesReady: false, recentWorkspaceId: 'ws-recent' }
+const startupCtx = {
+  slots: { inject() {}, register() { return () => {} } },
+  workspaces: {
+    startSession: () => {},
+    sessions: { clear: () => {}, list: { getSnapshot: () => ({ current: undefined }) } },
+    list: {
+      set(next) { setCalls.push(next); storeState = next },
+      getSnapshot: () => storeState,
+    },
+    pickDirectory: async () => '/tmp/root',
+    createDirectory: async (root, name) => `${root}/${name}`,
+  },
+}
+mod.apply(startupCtx, { rootDirectory: '/tmp/root' })
+// first ready projection (cold boot, no restored session)
+startupCtx.workspaces.list.set({ ...storeState, baselinesReady: true, recentWorkspaceId: 'ws-recent' })
+if (setCalls.length !== 1 || setCalls[0].recentWorkspaceId !== undefined) {
+  console.error(`FAIL: first ready projection did not mask recentWorkspaceId (got ${JSON.stringify(setCalls[0])})`)
+  process.exit(1)
+}
+// later projection (user activity) passes through unchanged
+startupCtx.workspaces.list.set({ baselinesReady: true, recentWorkspaceId: 'ws-other' })
+if (setCalls.length !== 2 || setCalls[1].recentWorkspaceId !== 'ws-other') {
+  console.error(`FAIL: post-startup projection was not passed through (got ${JSON.stringify(setCalls[1])})`)
+  process.exit(1)
+}
+// re-apply is idempotent: setter stays the restored original, no re-wrap
+const setBefore = startupCtx.workspaces.list.set
+mod.apply(startupCtx, { rootDirectory: '/tmp/root' })
+if (startupCtx.workspaces.list.set !== setBefore) {
+  console.error('FAIL: re-apply re-wrapped list.set')
+  process.exit(1)
+}
+
+console.log('PASS: loader id OK, exports OK, directoryFlow wired, settings.section "timestamp-workspace" registered with component, startSession shadowed (no-arg clears, explicit forwards, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
