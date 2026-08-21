@@ -41,8 +41,11 @@ function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<strin
 export function apply(ctx: ClientContext, config: Config): void {
   const occupant = (owner: DirectoryFlowOwnerProps) => React.createElement(Flow, { owner, pick: () => ctx.workspaces.pickDirectory(), create: (root, name) => ctx.workspaces.createDirectory(root, name), root: config.rootDirectory })
   const injected = () => ({})
+  // The host (x6) already holds a priority-0 registration on both single
+  // directory-flow holes; register at a lower priority to shadow it
+  // (ascending priority, lowest renders).
   ctx.slots.inject('conversation.hero.workspace.directoryFlow', () => ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
-    yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', inject: injected }, occupant)
-    yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected }, occupant)
+    yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', inject: injected, priority: -1 }, occupant)
+    yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, occupant)
   }))
 }
