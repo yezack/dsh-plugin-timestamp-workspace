@@ -434,6 +434,46 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
  * marked.
  */
 
+async function requestCleanup(paths: string[]): Promise<boolean> {
+  try {
+    const res = await fetch('/api/timestamp-workspace/cleanup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    })
+    const data = await res.json().catch(() => null)
+    if (res.ok && data?.ok === true) return true
+    throw new Error((data && typeof data.error === 'string' ? data.error : 'cleanup failed'))
+  } catch (reason) {
+    console.warn('[timestamp-workspace] cleanup failed:', reason)
+    return false
+  }
+}
+
+/** Archived blank temporary sessions (closed without content) drop their folders. */
+let cleanupHandledArchives = new Set<string>()
+function installCleanupOnArchive(workspaces: any, sessions: any): void {
+  const sessionsList = sessions?.list
+  const workspacesList = workspaces?.list
+  if (!sessionsList?.subscribe || !workspacesList?.subscribe) return
+  const scan = () => {
+    const sessionState = sessionsList.getSnapshot?.()
+    const workspaceState = workspacesList.getSnapshot?.()
+    const archived = new Set<string>((workspaceState?.archivedSessionIds ?? []) as string[])
+    const paths: string[] = []
+    for (const id of archived) {
+      if (cleanupHandledArchives.has(id)) continue
+      const summary = sessionState?.byId?.[id]
+      if (!summary?.cwd || summary.blank !== true || summary.origin === 'subagent') continue
+      cleanupHandledArchives.add(id)
+      paths.push(summary.cwd)
+    }
+    if (paths.length > 0) void requestCleanup(paths)
+  }
+  sessionsList.subscribe(scan)
+  workspacesList.subscribe(scan)
+}
+
 /**
  * Collect and clean unused temporary tasks: blank, non-current sessions whose
  * cwd lives directly under rootDirectory. The host half deletes the folders;
@@ -467,20 +507,9 @@ async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any, rootO
     targets.push({ sessionId: id, cwd: summary.cwd })
   }
   if (targets.length === 0) return 0
-  let removedPaths: string[] = []
-  try {
-    const res = await fetch('/api/timestamp-workspace/cleanup', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ paths: targets.map((t) => t.cwd) }),
-    })
-    const data = await res.json().catch(() => null)
-    if (res.ok && data?.ok === true) removedPaths = data.removed ?? []
-    else throw new Error((data && typeof data.error === 'string' ? data.error : 'cleanup failed') )
-  } catch (reason) {
-    console.warn('[timestamp-workspace] cleanup failed:', reason)
-    return 0
-  }
+  const ok = await requestCleanup(targets.map((target) => target.cwd))
+  if (!ok) return 0
+  const removedPaths = targets.map((target) => target.cwd)
   for (const target of targets) {
     try { await workspaces?.archiveSession?.(target.sessionId) } catch { /* archive is best-effort */ }
   }
@@ -623,6 +652,7 @@ export function apply(ctx: ClientContext, config?: Config): void {
   // contract remains intact and only temporary cwd-only sessions are unlocked.
   installNativeComposerOverride(ctx.slots, sessions, workspaces)
   installWorkspaceBrowserOverride(ctx.slots)
+  installCleanupOnArchive(workspaces, sessions)
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
   // the plugin's own fenced route. Guarded so older hosts without the
