@@ -440,13 +440,16 @@ async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any): Prom
     root = settings.rootDirectory.trim()
   } catch { /* keep '' -> nothing matches */ }
   if (root === '') return 0
-  const normalized = root.replace(/[\/]+$/, '')
+  // Normalize both sides (forward slashes, lowercase) so the Windows cwd
+  // (backslash) always matches the configured root (forward slash).
+  const norm = (p: string) => p.split(String.fromCharCode(92)).join('/').replace(/\/+$/, '').toLowerCase()
+  const rootKey = norm(root)
   const registered = new Set((workspaceState.items ?? []).flatMap((w: any) => w.sessionIds ?? []))
   const archived = new Set(workspaceState.archivedSessionIds ?? [])
   const targets: { sessionId: string; cwd: string }[] = []
   for (const id of sessionState.ids ?? []) {
     const summary = sessionState.byId?.[id]
-    if (!summary?.cwd || !summary.cwd.startsWith(normalized + '/') && !summary.cwd.startsWith(normalized + '')) continue
+    if (!summary?.cwd || !norm(summary.cwd).startsWith(rootKey + '/')) continue
     if (registered.has(id) || archived.has(id) || id === sessionState.current) continue
     if (summary.origin === 'subagent') continue
     if (summary.blank !== true) continue
