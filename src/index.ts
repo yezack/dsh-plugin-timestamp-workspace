@@ -1,7 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 
 export const name = 'timestamp-workspace'
 export const inject: string[] = ['webServer']
@@ -108,6 +108,39 @@ export function apply(ctx: HostContext, config?: { rootDirectory?: string }): vo
         return json(res, 200, { ok: true, rootDirectory: trimmed })
       },
     })
-    return dispose
-  }, 'timestamp-workspace: /api/timestamp-workspace/settings')
+    const disposeCleanup = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/timestamp-workspace/cleanup',
+      handler: async (req: any, res: any) => {
+        if (req.method !== 'POST') {
+          return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        }
+        const body = await readBody(req)
+        let payload: unknown
+        try { payload = JSON.parse(body ?? '{}') } catch { return json(res, 400, { ok: false, error: 'bad-json' }) }
+        const paths = (payload as { paths?: unknown })?.paths
+        if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string')) {
+          return json(res, 400, { ok: false, error: 'paths must be an array of strings' })
+        }
+        const root = resolve(resolveRoot().trim())
+        const removed: string[] = []
+        for (const raw of paths as string[]) {
+          const candidate = resolve(raw)
+          // Safety: only delete direct children of the configured root.
+          if (candidate === root || !candidate.startsWith(root + sep)) {
+            return json(res, 400, { ok: false, error: 'refusing to delete a path outside rootDirectory' })
+          }
+          try {
+            rmSync(candidate, { recursive: true, force: true })
+            removed.push(candidate)
+          } catch (reason) {
+            return json(res, 500, { ok: false, error: reason instanceof Error ? reason.message : String(reason) })
+          }
+        }
+        ctx.logger?.info?.(`[timestamp-workspace] cleaned ${removed.length} temporary folder(s)`)
+        return json(res, 200, { ok: true, removed })
+      },
+    })
+    return () => { dispose(); disposeCleanup() }
+  }, 'timestamp-workspace: /api/timestamp-workspace/settings+cleanup')
 }

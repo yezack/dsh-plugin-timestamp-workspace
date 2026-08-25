@@ -112,8 +112,10 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
     const root = await resolveRoot(fallbackRoot)
     const trimmed = root.trim()
     if (!trimmed) throw new Error('rootDirectory 未配置')
-    console.log('[timestamp-workspace] temporary conversation cwd:', trimmed)
-    const sessionId = await withTimeout(sessions.create({ cwd: trimmed }), 20000, 'sessions.create')
+    console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
+    const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
+    console.log('[timestamp-workspace] temp task folder ready:', path)
+    const sessionId = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
     console.log('[timestamp-workspace] temp task session ready:', sessionId)
     await withTimeout(Promise.resolve(sessions.open(sessionId)), 20000, 'sessions.open')
     setTaskStatus({ phase: 'idle' })
@@ -422,6 +424,55 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
  * workspace whose title happens to be "未分组" keeps its own key and is never
  * marked.
  */
+
+/**
+ * Collect and clean unused temporary tasks: blank, non-current sessions whose
+ * cwd lives directly under rootDirectory. The host half deletes the folders;
+ * the sessions are archived so they leave the ungrouped list.
+ */
+async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any): Promise<number> {
+  const sessionState = sessions?.list?.getSnapshot?.()
+  const workspaceState = workspaces?.list?.getSnapshot?.()
+  if (!sessionState || !workspaceState) return 0
+  let root = ''
+  try {
+    const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
+    root = settings.rootDirectory.trim()
+  } catch { /* keep '' -> nothing matches */ }
+  if (root === '') return 0
+  const normalized = root.replace(/[\/]+$/, '')
+  const registered = new Set((workspaceState.items ?? []).flatMap((w: any) => w.sessionIds ?? []))
+  const archived = new Set(workspaceState.archivedSessionIds ?? [])
+  const targets: { sessionId: string; cwd: string }[] = []
+  for (const id of sessionState.ids ?? []) {
+    const summary = sessionState.byId?.[id]
+    if (!summary?.cwd || !summary.cwd.startsWith(normalized + '/') && !summary.cwd.startsWith(normalized + '')) continue
+    if (registered.has(id) || archived.has(id) || id === sessionState.current) continue
+    if (summary.origin === 'subagent') continue
+    if (summary.blank !== true) continue
+    targets.push({ sessionId: id, cwd: summary.cwd })
+  }
+  if (targets.length === 0) return 0
+  let removedPaths: string[] = []
+  try {
+    const res = await fetch('/api/timestamp-workspace/cleanup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths: targets.map((t) => t.cwd) }),
+    })
+    const data = await res.json().catch(() => null)
+    if (res.ok && data?.ok === true) removedPaths = data.removed ?? []
+    else throw new Error((data && typeof data.error === 'string' ? data.error : 'cleanup failed') )
+  } catch (reason) {
+    console.warn('[timestamp-workspace] cleanup failed:', reason)
+    return 0
+  }
+  for (const target of targets) {
+    try { await workspaces?.archiveSession?.(target.sessionId) } catch { /* archive is best-effort */ }
+  }
+  return removedPaths.length
+}
+
 /**
  * Wrap the native WorkspaceBrowser and, after every committed render, detect
  * the ungrouped group by stable DOM signals (draggable="false" project row, no
@@ -484,6 +535,26 @@ function WorkspaceBrowserOrderWrapper(props: any) {
         plus.addEventListener('click', () => {
           try { (runtime as any)?.workspaces?.startSession?.() } catch { /* host may be tearing down */ }
         })
+      }
+      const actions = row.querySelector('[class*="rowActions"]')
+      if (actions !== null && !actions.querySelector('[data-timestamp-temp-cleanup]')) {
+        const clean = document.createElement('button')
+        clean.type = 'button'
+        clean.setAttribute('data-timestamp-temp-cleanup', '')
+        clean.title = '清理未使用的临时任务'
+        clean.textContent = '清理'
+        clean.style.cssText = 'margin-left:4px;padding:0 6px;height:22px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:11px'
+        clean.addEventListener('click', () => {
+          const ws = (runtime as any)?.workspaces
+          const ss = (runtime as any)?.sessions
+          if (!ws || !ss) return
+          if (!window.confirm('清理所有未使用的临时任务？（将删除对应文件夹并归档空白会话）')) return
+          cleanupUnusedTemporaryTasks(ws, ss).then((count) => {
+            if (count > 0) window.alert(`已清理 ${count} 个未使用的临时任务`)
+            else window.alert('没有可清理的未使用临时任务')
+          }).catch(() => {})
+        })
+        actions.appendChild(clean)
       }
       if (tree.firstElementChild !== group) tree.insertBefore(group, tree.firstElementChild)
     }

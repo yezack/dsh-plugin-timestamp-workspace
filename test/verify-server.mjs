@@ -108,7 +108,39 @@ try {
   r = await request(routes2, 'GET', '/api/timestamp-workspace/settings')
   if (r.status !== 200 || r.body.rootDirectory !== newRoot) fail(`restart should prefer store, got ${JSON.stringify(r)}`)
 
-  console.log('PASS: route registered, GET/PUT round-trip OK, validation OK, store persists, store wins over yaml on restart')
+  // --- cleanup route ---
+// create a child directory under the fake root, then clean it
+const child = join(realRoot, '20260826000000')
+mkdirSync(child)
+r = await request(routes, 'POST', '/api/timestamp-workspace/cleanup', { paths: [child] })
+if (r.status !== 200 || r.body.ok !== true || r.body.removed.length !== 1) {
+  console.error(`FAIL: cleanup did not remove the child folder (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+if (existsSync(child)) {
+  console.error('FAIL: cleanup left the child folder on disk')
+  process.exit(1)
+}
+// refusing to delete the root itself
+r = await request(routes, 'POST', '/api/timestamp-workspace/cleanup', { paths: [fakeHome] })
+if (r.status !== 400) {
+  console.error(`FAIL: cleanup must refuse to delete the root (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+// refusing paths outside the root
+r = await request(routes, 'POST', '/api/timestamp-workspace/cleanup', { paths: [join(tmpdir(), 'outside-root')] })
+if (r.status !== 400) {
+  console.error(`FAIL: cleanup must refuse paths outside the root (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+// malformed payload
+r = await request(routes, 'POST', '/api/timestamp-workspace/cleanup', { paths: 'nope' })
+if (r.status !== 400) {
+  console.error(`FAIL: cleanup must reject non-array paths (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+
+console.log('PASS: route registered, GET/PUT round-trip OK, validation OK, store persists, store wins over yaml on restart')
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error))
 } finally {

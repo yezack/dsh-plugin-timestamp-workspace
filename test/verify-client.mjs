@@ -271,10 +271,9 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-// startSession shadowing: a parameterless New Session starts a temporary
-// conversation whose cwd is rootDirectory itself — NO timestamp subfolder is
-// created (host fixes cwd at birth and mkdirs it eagerly). Explicit targets
-// still run the host logic.
+// startSession shadowing: a parameterless New Session creates a timestamp
+// subfolder under the root plus an ungrouped cwd-only session and opens it.
+// Explicit targets still run the host logic.
 if (typeof workspacesStub.startSession !== 'function' || workspacesStub.startSession === originalStartSession) {
   console.error('FAIL: workspaces.startSession was not shadowed')
   process.exit(1)
@@ -285,14 +284,14 @@ const clearBeforeAuto = calls.clear
 workspacesStub.createDirectory = createDirectoryStub
 const sessionCallsBefore = sessionCalls.length
 await workspacesStub.startSession()
-if (createCalls.length !== 0) {
-  console.error(`FAIL: temp task must not create a subfolder (got ${JSON.stringify(createCalls)})`)
+if (createCalls.length !== 1 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
+  console.error(`FAIL: temp task did not create a timestamp folder under the root (got ${JSON.stringify(createCalls[0])})`)
   process.exit(1)
 }
 const createdSession = sessionCalls[sessionCallsBefore]
 const opened = sessionCalls[sessionCallsBefore + 1]
-if (!createdSession || createdSession.workspaceId !== undefined || createdSession.cwd !== '/tmp/root') {
-  console.error(`FAIL: temp task cwd must be rootDirectory itself (got ${JSON.stringify(createdSession)})`)
+if (!createdSession || createdSession.workspaceId !== undefined || typeof createdSession.cwd !== 'string' || !createdSession.cwd.startsWith('/tmp/root/')) {
+  console.error(`FAIL: temp task did not create a cwd-only session (got ${JSON.stringify(createdSession)})`)
   process.exit(1)
 }
 if (!opened || opened.open !== `temp:${createdSession.cwd}`) {
@@ -318,9 +317,18 @@ if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !==
   console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-// failure path: sessions.create rejection keeps the current view (no clear)
+// failure path: a failing folder create keeps the current view (no clear)
+const sessionCallsAtFail = sessionCalls.length
+workspacesStub.createDirectory = async () => { throw new Error('boom') }
+await workspacesStub.startSession()
+if (calls.clear !== clearBeforeAuto || sessionCalls.length !== sessionCallsAtFail) {
+  console.error(`FAIL: failed temp task must keep the view without creating (clear=${calls.clear})`)
+  process.exit(1)
+}
+// failure path: sessions.create rejection also keeps view
 const sessionsCreateStub = sessionsStub.create
 sessionsStub.create = async () => { throw new Error('session boom') }
+workspacesStub.createDirectory = createDirectoryStub
 await workspacesStub.startSession()
 if (calls.clear !== clearBeforeAuto) {
   console.error(`FAIL: failed session create must not clear the selection (clear=${calls.clear})`)
@@ -328,7 +336,7 @@ if (calls.clear !== clearBeforeAuto) {
 }
 sessionsStub.create = sessionsCreateStub
 // Idempotent: a second apply() must not wrap the method again — no-arg still
-// starts a temp task with rootDirectory as cwd.
+// creates a temp task.
 const sessionCallsBeforeReapply = sessionCalls.length
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 await workspacesStub.startSession()
@@ -384,4 +392,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp conversation rooted at rootDirectory without creating subfolders, explicit forwards, failures keep the view, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg creates a timestamp subfolder + cwd-only session, explicit forwards, failures keep the view, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
