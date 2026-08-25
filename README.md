@@ -18,6 +18,23 @@ Add to the profile's `cordis.patch.yml`. The plugin **must** be registered with 
         rootDirectory: C:/Users/<your-name>/Documents/dsh-workspaces
 ```
 
+## Temporary conversations (host patch)
+
+The host only unlocks the hero composer for blank sessions whose cwd is a
+registered workspace once the workspace baseline is ready — a workspace-less
+temporary task session stays locked ("choose a workspace to start"). To enable
+true temp conversations (new conversation → folder under `rootDirectory` →
+ungrouped session → type immediately, no workspace selection), patch the
+installed host bundle once (requires Administrator; re-apply after app updates):
+
+```powershell
+# PowerShell as Administrator
+node "C:/Users/<you>/Documents/_CODE_/dsh_plugins/dsh插件-默认工作区插件/scripts/patch-host-temp-chat.mjs"
+```
+
+The script is idempotent and backs up the original (`client.js.bak-temp-chat`);
+use `--check` to inspect state and `--revert` to restore.
+
 ## Settings UI
 
 The dsh Settings shell shows a "Timestamp workspace" section to pick/type and save `rootDirectory`. The value is persisted to `$DSH_HOME/storages/timestamp-workspace.json` and **takes precedence over** the `cordis.patch.yml` value; the directory-flow dialog re-fetches it on every open, so saves apply without a reload. Saving validates that the path exists and is a directory; invalid paths are rejected with an error instead of being persisted.
