@@ -479,12 +479,14 @@ function mountTemporaryConversationSection(sessions: any, workspaces: any): () =
       if (text.startsWith('未分组') || text.startsWith('Ungrouped')) (node as HTMLElement).style.display = 'none'
     }
   }
-  const observer = new MutationObserver(render)
-  observer.observe(document.body, { childList: true, subtree: true })
+  // Poll only for shell mount/React re-render recovery. Do not observe the
+  // whole document: render() mutates the sidebar itself and a body observer
+  // would recursively trigger render until the UI locks up.
+  const poll = window.setInterval(render, 500)
   const unsubSessions = sessions?.list?.subscribe?.(render) ?? (() => {})
   const unsubWorkspaces = workspaces?.list?.subscribe?.(render) ?? (() => {})
   render()
-  return () => { unsubSessions(); unsubWorkspaces(); observer.disconnect(); section.remove(); style.remove() }
+  return () => { unsubSessions(); unsubWorkspaces(); window.clearInterval(poll); section.remove(); style.remove() }
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
