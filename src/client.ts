@@ -420,11 +420,47 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
 }
 
 /**
- * Wrap the native WorkspaceBrowser and move the ungrouped group to the top of
- * its tree after every render. The wrapper mounts the native element inside a
- * layout-neutral (display:contents) container and, on each committed render,
- * relocates the groupSection whose text is 未分组/Ungrouped to the first slot.
- * Pure DOM placement inside our own subtree — no observers, no body surgery.
+ * Mark the host's ungrouped group (React key === "") with a data attribute so
+ * the DOM placement and CSS can target it without guessing labels. A real
+ * workspace whose title happens to be "未分组" keeps its own key and is never
+ * marked.
+ */
+function markUngrouped(node: any): any {
+  if (node === null || node === undefined || typeof node !== 'object') return node
+  if (Array.isArray(node)) {
+    const mapped = node.map(markUngrouped)
+    return mapped.every((v: any, i: number) => v === node[i]) ? node : mapped
+  }
+  const props = node.props
+  if (props === undefined) return node
+  const children = props.children
+  if (Array.isArray(children)) {
+    let changed = false
+    const next = children.map((child: any) => {
+      if (!Array.isArray(child)) return child
+      const groups = child.map((group: any) => {
+        if (group !== null && typeof group === 'object' && group.key === '' && group.props?.['data-timestamp-ungrouped'] === undefined) {
+          changed = true
+          return React.cloneElement(group, { ...group.props, 'data-timestamp-ungrouped': 'true' })
+        }
+        return group
+      })
+      return changed ? groups : child
+    })
+    if (changed) return React.cloneElement(node, props, next)
+    return node
+  }
+  if (children !== undefined && children !== null) {
+    const next = Array.isArray(children) ? children.map(markUngrouped) : markUngrouped(children)
+    return next === children ? node : React.cloneElement(node, props, next)
+  }
+  return node
+}
+
+/**
+ * Wrap the native WorkspaceBrowser in a layout-neutral container, pin the
+ * marked ungrouped group to the top after each committed render, and inject
+ * the distinct visual treatment for it.
  */
 function WorkspaceBrowserOrderWrapper(props: any) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
@@ -434,31 +470,40 @@ function WorkspaceBrowserOrderWrapper(props: any) {
     if (container === null) return
     const tree = container.querySelector('[role="tree"]')
     if (tree === null) return
-    let group: HTMLElement | null = null
-    for (const el of Array.from(tree.children)) {
-      const text = el.textContent ?? ''
-      if (text.includes('未分组') || text.includes('Ungrouped')) {
-        group = el as HTMLElement
-        break
-      }
-    }
+    const group = tree.querySelector<HTMLElement>('[data-timestamp-ungrouped]')
     if (group !== null && tree.firstElementChild !== group) {
       tree.insertBefore(group, tree.firstElementChild)
     }
   })
-  return React.createElement('div', { ref: containerRef, style: { display: 'contents' } },
-    React.createElement(nativeWorkspaceBrowserOriginal, props))
+  return React.createElement('div', { ref: containerRef, style: { display: 'contents' } }, props.__element)
 }
 
 let nativeWorkspaceBrowserEntry: any = null
 let nativeWorkspaceBrowserOriginal: any = null
+const UNGROUPED_STYLE_ID = 'dsh-timestamp-workspace-ungrouped-style'
+function installUngroupedStyle(): void {
+  if (typeof document === 'undefined' || document.getElementById(UNGROUPED_STYLE_ID) !== null) return
+  const style = document.createElement('style')
+  style.id = UNGROUPED_STYLE_ID
+  style.textContent = [
+    '[data-timestamp-ungrouped]{font-style:italic;border:1px dashed var(--dsw-alias-border-l3);border-radius:12px;margin:4px 8px;padding:2px}',
+    '[data-timestamp-ungrouped] [class*="workspaceLabel"]{color:var(--dsw-alias-label-tertiary)}',
+    '[data-timestamp-ungrouped] [class*="workspaceLabel"]::before{content:"⚡ 临时 · ";font-style:normal}',
+  ].join('')
+  document.head.appendChild(style)
+}
 function installWorkspaceBrowserOverride(slots: any): void {
   const entries = slots?.entries?.('sidebar.workspaces') ?? []
   const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeWorkspaceBrowserEntry)
   if (!entry || nativeWorkspaceBrowserEntry === entry) return
   nativeWorkspaceBrowserEntry = entry
   nativeWorkspaceBrowserOriginal = entry.component
-  entry.component = (props: any) => React.createElement(WorkspaceBrowserOrderWrapper, props)
+  installUngroupedStyle()
+  entry.component = (props: any) => {
+    let element: any
+    try { element = markUngrouped(React.createElement(nativeWorkspaceBrowserOriginal, props)) } catch { element = React.createElement(nativeWorkspaceBrowserOriginal, props) }
+    return React.createElement(WorkspaceBrowserOrderWrapper, { ...props, __element: element })
+  }
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
