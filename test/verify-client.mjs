@@ -110,7 +110,7 @@ let workspaceStore = {
   baselinesReady: true,
   recentWorkspaceId: undefined,
 }
-let sessionStore = { current: undefined }
+let sessionStore = { current: undefined, byId: {} }
 const calls = { originalStartSession: [], clear: 0 }
 const originalStartSession = (workspaceId) => { calls.originalStartSession.push(workspaceId) }
 const workspacesStub = {
@@ -118,7 +118,7 @@ const workspacesStub = {
   sessions: {
     clear: () => {
       calls.clear += 1
-      sessionStore = { current: undefined }
+      sessionStore = { current: undefined, byId: {} }
     },
     list: {
       getSnapshot: () => sessionStore,
@@ -134,8 +134,16 @@ const workspacesStub = {
   createDirectory: async (root, name) => `${root}/${name}`,
   create: async ({ path }) => ({ workspaceId: `created:${path}` }),
 }
+const sessionCalls = []
+const sessionsStub = {
+  create: async (opts) => {
+    sessionCalls.push(opts)
+    return { ok: true, value: { sessionId: `temp:${opts.cwd}` } }
+  },
+  open: async (sessionId) => { sessionCalls.push({ open: sessionId }) },
+}
 
-const ctxStub = { slots: registry, workspaces: workspacesStub }
+const ctxStub = { slots: registry, workspaces: workspacesStub, sessions: sessionsStub }
 
 // The host bundle (dsh-client-ui-workspace) declares the picker root and its
 // directory-flow child FIRST, exactly like the real app. A plugin that
@@ -217,7 +225,7 @@ if (defaultTree.some((node) => node === '选择已有工作区')) {
 }
 
 // Hero occupant, closed, session bound to a workspace -> title + clear button.
-sessionStore = { current: 'session-1' }
+sessionStore = { current: 'session-1', byId: { 'session-1': { cwd: '/tmp/ws-1' } } }
 const selectedTree = renderComponent(heroReg.component(owner(false)))
 const selectedState = selectedTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
 const clearButton = selectedTree.find((node) => node?.props?.['aria-label'] === '取消当前工作区')
@@ -230,6 +238,17 @@ if (calls.clear !== 1 || sessionStore.current !== undefined) {
   console.error(`FAIL: clear button did not clear the selection (clear=${calls.clear}, current=${sessionStore.current})`)
   process.exit(1)
 }
+
+// Hero occupant, closed, temp task session (no workspace, cwd only) ->
+// labeled by its cwd folder name.
+sessionStore = { current: 'temp-9', byId: { 'temp-9': { cwd: '/tmp/root/20260825120000' } } }
+const tempTree = renderComponent(heroReg.component(owner(false)))
+const tempState = tempTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
+if (tempState?.props?.['data-timestamp-workspace-state'] !== 'selected' || !tempTree.some((node) => node === '工作区：20260825120000')) {
+  console.error('FAIL: temp task session was not labeled by its cwd folder name')
+  process.exit(1)
+}
+sessionStore = { current: undefined, byId: {} }
 
 // Hero occupant, open -> creation dialog.
 const openTree = renderComponent(heroReg.component(owner(true)))
@@ -259,54 +278,63 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-// startSession shadowing: a parameterless New Session auto-creates a
-// timestamp workspace under the root and starts in it (the host blocks
-// composer input while no session exists, so clearing alone would leave a
-// dead blank view); an explicit workspace target runs the host logic.
+// startSession shadowing: a parameterless New Session starts a temporary
+// task — a timestamp folder under the root plus an ungrouped session bound
+// to that cwd (NOT registered as a workspace) — and opens it, so the
+// composer is immediately usable; an explicit workspace target runs the
+// host logic.
 if (typeof workspacesStub.startSession !== 'function' || workspacesStub.startSession === originalStartSession) {
   console.error('FAIL: workspaces.startSession was not shadowed')
   process.exit(1)
 }
 const createCalls = []
 const createDirectoryStub = async (root, name) => { createCalls.push({ root, name }); return `${root}/${name}` }
-const registerWorkspaceStub = async ({ path }) => { createCalls.push({ path }); return { workspaceId: `created:${path}` } }
-workspacesStub.createDirectory = createDirectoryStub
-workspacesStub.create = registerWorkspaceStub
 const clearBeforeAuto = calls.clear
+workspacesStub.createDirectory = createDirectoryStub
+const sessionCallsBefore = sessionCalls.length
 await workspacesStub.startSession()
-if (calls.originalStartSession.length !== 1 || typeof calls.originalStartSession[0] !== 'string' || !calls.originalStartSession[0].startsWith('created:/tmp/root/')) {
-  console.error(`FAIL: parameterless startSession did not auto-create and forward (got ${JSON.stringify(calls.originalStartSession)})`)
+if (createCalls.length !== 1 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
+  console.error(`FAIL: temp task did not create a timestamp folder under the root (got ${JSON.stringify(createCalls[0])})`)
   process.exit(1)
 }
-if (createCalls.length !== 2 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
-  console.error(`FAIL: auto-create did not create a timestamp dir under the root (got ${JSON.stringify(createCalls[0])})`)
+const createdSession = sessionCalls[sessionCallsBefore]
+const opened = sessionCalls[sessionCallsBefore + 1]
+if (!createdSession || createdSession.workspaceId !== undefined || typeof createdSession.cwd !== 'string' || !createdSession.cwd.startsWith('/tmp/root/')) {
+  console.error(`FAIL: temp task did not create a cwd-only session (got ${JSON.stringify(createdSession)})`)
+  process.exit(1)
+}
+if (!opened || opened.open !== `temp:${createdSession.cwd}`) {
+  console.error(`FAIL: temp task session was not opened (got ${JSON.stringify(opened)})`)
+  process.exit(1)
+}
+if (calls.originalStartSession.length !== 0) {
+  console.error(`FAIL: temp task must not forward to the host startSession (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
 if (calls.clear !== clearBeforeAuto) {
-  console.error('FAIL: successful auto-create must not clear the selection')
+  console.error('FAIL: successful temp task must not clear the selection')
   process.exit(1)
 }
 // explicit target forwards to the host logic
 workspacesStub.startSession('ws-1')
-if (calls.originalStartSession.length !== 2 || calls.originalStartSession[1] !== 'ws-1') {
+if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !== 'ws-1') {
   console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-// failure path: a failing auto-create falls back to the blank view
+// failure path: a failing folder create falls back to the blank view
 workspacesStub.createDirectory = async () => { throw new Error('boom') }
 await workspacesStub.startSession()
 if (calls.clear !== clearBeforeAuto + 1) {
-  console.error(`FAIL: failed auto-create did not fall back to clearing (clear=${calls.clear})`)
+  console.error(`FAIL: failed temp task did not fall back to clearing (clear=${calls.clear})`)
   process.exit(1)
 }
 // Idempotent: a second apply() must not wrap the method again — the same
-// shadow keeps auto-creating.
+// shadow keeps starting temp tasks.
 workspacesStub.createDirectory = createDirectoryStub
-workspacesStub.create = registerWorkspaceStub
-const forwardedBefore = calls.originalStartSession.length
+const sessionCallsBefore2 = sessionCalls.length
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 await workspacesStub.startSession()
-if (calls.originalStartSession.length !== forwardedBefore + 1) {
+if (sessionCalls.length !== sessionCallsBefore2 + 2) {
   console.error('FAIL: re-apply double-wrapped startSession')
   process.exit(1)
 }
@@ -358,4 +386,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders state row + clear + dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg auto-creates a timestamp workspace, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders state row + clear + dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp task: timestamp folder + cwd-only ungrouped session, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')

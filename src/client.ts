@@ -3,7 +3,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
 
 export const name = 'timestamp-workspace-client'
-export const inject = ['slots', 'workspaces']
+export const inject = ['slots', 'workspaces', 'sessions']
 export interface Config { rootDirectory: string }
 
 export function formatTimestamp(date = new Date()): string {
@@ -47,18 +47,35 @@ let runtime: ClientContext | null = null
 // conversation") as `currentWorkspaceId ?? recentWorkspaceId`, so a fresh
 // conversation silently inherits the last-used folder. That is a host
 // default no slot can reach, so we shadow the method on the live service
-// object: a parameterless New Session now auto-creates a timestamp
-// workspace under the configured root and starts in it (the host blocks
-// composer input while no session exists, so clearing alone would leave a
-// dead blank view). Explicit workspace targets (per-workspace New Session
-// in the sidebar) still run the original host logic. Guarded by a
-// module-level flag so a hot reload (apply re-run) does not double-wrap.
+// object: a parameterless New Session now starts a temporary task — a
+// timestamp folder under the configured root (`rootDirectory/yyyyMMddHHmmss`)
+// plus an ungrouped session bound to that cwd, NOT registered as a
+// workspace. The host blocks composer input while no session exists, so
+// this is what keeps the "don't pick, just chat" flow usable. Explicit
+// workspace targets (per-workspace New Session in the sidebar) still run
+// the original host logic. Guarded by a module-level flag so a hot reload
+// (apply re-run) does not double-wrap.
 let originalStartSession: ((workspaceId?: string) => void) | null = null
 
 let autoCreating = false
 
-async function autoCreateAndStart(workspaces: WorkspaceService | undefined, fallbackRoot: string): Promise<void> {
-  if (autoCreating || !workspaces) return
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${label}`)), ms)
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value) },
+      (reason) => { clearTimeout(timer); reject(reason) },
+    )
+  })
+}
+
+type SessionsService = {
+  create: (opts: { cwd?: string; workspaceId?: string }) => Promise<{ ok: boolean; value?: { sessionId: string }; error?: { message?: string } }>
+  open: (sessionId: string) => void | Promise<void>
+}
+
+async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sessions: SessionsService | undefined, fallbackRoot: string): Promise<void> {
+  if (autoCreating || !workspaces || !sessions) return
   autoCreating = true
   try {
     let root = fallbackRoot
@@ -68,14 +85,20 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, fall
     } catch { /* keep the yaml/config fallback */ }
     const trimmed = root.trim()
     if (!trimmed) throw new Error('rootDirectory 未配置')
-    const path = await workspaces.createDirectory(trimmed, formatTimestamp())
-    const workspace = await workspaces.create({ path })
-    originalStartSession?.(workspace.workspaceId)
+    console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
+    const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
+    console.log('[timestamp-workspace] temp task folder ready:', path)
+    const result = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
+    if (!result.ok) throw new Error(result.error?.message ?? 'session create failed')
+    const sessionId = result.value?.sessionId
+    if (!sessionId) throw new Error('session create returned no sessionId')
+    console.log('[timestamp-workspace] temp task session ready:', sessionId)
+    await withTimeout(Promise.resolve(sessions.open(sessionId)), 20000, 'sessions.open')
   } catch (reason) {
-    // Auto-create failed (no root configured, same-second conflict, host
-    // rejection...): fall back to the workspace-less view and surface the
-    // reason on the console; the user can pick/create explicitly.
-    console.warn('[timestamp-workspace] auto-create failed, staying blank:', reason)
+    // Temp-task setup failed (no root configured, same-second conflict,
+    // host rejection, timeout...): fall back to the workspace-less view;
+    // the user can pick/create explicitly.
+    console.warn('[timestamp-workspace] temp task start failed, staying blank:', reason)
     clearWorkspaceSelection(workspaces ?? {})
   } finally {
     autoCreating = false
@@ -208,7 +231,7 @@ function WorkspaceState(props: {
   clear: () => void
 }) {
   const { selectedId, selectedTitle, clear } = props
-  const selected = selectedId !== undefined
+  const selected = selectedId !== undefined || selectedTitle !== undefined
   return React.createElement('div', {
     'data-timestamp-workspace-state': selected ? 'selected' : 'default',
     style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
@@ -247,11 +270,22 @@ type WorkspaceListStore = {
   subscribe?: (listener: () => void) => () => void
 }
 type SessionListStore = {
-  getSnapshot?: () => { current?: string }
+  getSnapshot?: () => { current?: string; byId?: Record<string, { cwd?: string; title?: string }> }
   subscribe?: (listener: () => void) => () => void
 }
 
-/** Current session's workspace, projected from the workspace list store. */
+/** Single path segment, host-style display label for a cwd. */
+function workspaceLabel(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const parts = trimmed.split(/[\\/]/)
+  return parts[parts.length - 1] || trimmed
+}
+
+/**
+ * Current session's workspace, projected from the workspace list store.
+ * Temporary (ungrouped) task sessions have no registered workspace, so
+ * fall back to labeling them with their cwd folder name.
+ */
 function useCurrentWorkspace(workspaces: WorkspaceService | undefined): { selectedId?: string; selectedTitle?: string } {
   const list = (workspaces as unknown as { list?: WorkspaceListStore })?.list
   const sessions = (workspaces as unknown as { sessions?: { list?: SessionListStore } })?.sessions?.list
@@ -269,7 +303,10 @@ function useCurrentWorkspace(workspaces: WorkspaceService | undefined): { select
   if (!projection || !session) return {}
   const currentId = session?.current
   const current = projection?.items?.find((item) => currentId !== undefined && item.sessionIds?.includes(currentId))
-  return { selectedId: current?.workspaceId, selectedTitle: current?.title }
+  if (current) return { selectedId: current.workspaceId, selectedTitle: current.title }
+  const summary = currentId !== undefined ? session?.byId?.[currentId] : undefined
+  if (summary?.cwd) return { selectedTitle: workspaceLabel(summary.cwd) }
+  return {}
 }
 
 function FlowDialog(props: {
@@ -346,10 +383,11 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
 export function apply(ctx: ClientContext, config: Config): void {
   runtime = ctx
   const workspaces = ctx.workspaces as unknown as WorkspaceService | undefined
+  const sessions = ctx.sessions as unknown as SessionsService | undefined
   if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
     originalStartSession = workspaces.startSession.bind(workspaces)
     workspaces.startSession = (workspaceId?: string): void | Promise<void> => {
-      if (workspaceId === undefined) return autoCreateAndStart(workspaces, config.rootDirectory)
+      if (workspaceId === undefined) return autoCreateAndStart(workspaces, sessions, config.rootDirectory)
       originalStartSession!(workspaceId)
       return undefined
     }
