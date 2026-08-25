@@ -434,6 +434,22 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
 function WorkspaceBrowserOrderWrapper(props: any) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const useLayout = React.useLayoutEffect ?? React.useEffect
+  // Ungrouped session count per the official sessionVisible rule (tree.ts):
+  // non-subagent, not archived, cwd-only, and blank only when it is current.
+  const sessionState = props.useSessions?.((s: any) => s)
+  const workspaceState = props.useWorkspaces?.((s: any) => s)
+  let ungroupedCount = 0
+  if (sessionState !== undefined && workspaceState !== undefined) {
+    const registered = new Set((workspaceState.items ?? []).flatMap((w: any) => w.sessionIds ?? []))
+    const archived = new Set(workspaceState.archivedSessionIds ?? [])
+    ungroupedCount = (sessionState.ids ?? []).filter((id: string) => {
+      const summary = sessionState.byId?.[id]
+      if (summary?.cwd === undefined || registered.has(id) || archived.has(id)) return false
+      if (summary.origin === 'subagent') return false
+      if (summary.blank === true && id !== sessionState.current) return false
+      return true
+    }).length
+  }
   useLayout(() => {
     const container = containerRef.current
     if (container === null) return
@@ -452,6 +468,15 @@ function WorkspaceBrowserOrderWrapper(props: any) {
         || (text.includes('未分组') && !text.includes('工作区“'))
       if (!isUngrouped) continue
       group.setAttribute('data-timestamp-ungrouped', '')
+      const title = Array.from(row.querySelectorAll('span')).find((s) => {
+        const value = (s.textContent ?? '').trim()
+        return value === '未分组' || value === 'Ungrouped' || /^(未分组|Ungrouped)\s*\(\d+\)$/.test(value)
+      })
+      if (title !== undefined && ungroupedCount > 0) {
+        const base = (title.textContent ?? '').replace(/\s*\(\d+\)\s*$/, '')
+        const next = `${base} (${ungroupedCount})`
+        if (title.textContent !== next) title.textContent = next
+      }
       // The host onCreate is a no-op for the ungrouped bucket (source:
       // WorkspaceBrowser onCreate guards on workspaceId !== undefined), so the
       // trailing + button binds a new temporary task instead. Idempotent via a
