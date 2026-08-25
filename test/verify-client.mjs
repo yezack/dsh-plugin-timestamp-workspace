@@ -309,10 +309,16 @@ if (calls.clear !== clearBeforeAuto) {
   console.error('FAIL: successful temp task must not clear the selection')
   process.exit(1)
 }
-// explicit target forwards to the host logic
-workspacesStub.startSession('ws-1')
-if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !== 'ws-1') {
-  console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
+// explicit workspace id also starts a temporary task (New Session is always
+// a temp conversation; formal workspaces are opened through the picker)
+const sessionCallsBeforeExplicit = sessionCalls.length
+await workspacesStub.startSession('ws-1')
+if (calls.originalStartSession.length !== 0) {
+  console.error(`FAIL: explicit startSession must not forward to host logic (got ${JSON.stringify(calls.originalStartSession)})`)
+  process.exit(1)
+}
+if (sessionCalls.length !== sessionCallsBeforeExplicit + 2) {
+  console.error(`FAIL: explicit startSession did not create temp tasks (got ${JSON.stringify(sessionCalls.slice(sessionCallsBeforeExplicit))})`)
   process.exit(1)
 }
 // failure path: a failing folder create falls back to the blank view
@@ -420,4 +426,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp task: timestamp folder + cwd-only ungrouped session, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (every New Session starts a temp task: timestamp folder + cwd-only ungrouped session, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')

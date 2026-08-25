@@ -393,8 +393,6 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
  * native DOM, styles, attachments, model controls, keyboard handling, draft
  * machine, and submit behavior without registering a competing slot entry.
  */
-let nativeComposerEntry: any = null
-let nativeComposerOriginal: any = null
 function isTemporarySessionProps(props: any, sessions: unknown, workspaces: unknown): boolean {
   const sessionId = props.sessionId
   const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
@@ -404,6 +402,8 @@ function isTemporarySessionProps(props: any, sessions: unknown, workspaces: unkn
   return !!summary?.cwd && !registered
 }
 
+let nativeComposerEntry: any = null
+let nativeComposerOriginal: any = null
 function installNativeComposerOverride(slots: any, sessions: unknown, workspaces: unknown): void {
   const entries = slots?.entries?.('conversation.composer.bar') ?? []
   const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeComposerEntry)
@@ -412,14 +412,74 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
   nativeComposerOriginal = entry.component
   entry.component = (props: any) => {
     const temporary = isTemporarySessionProps(props, sessions, workspaces)
+    const clear = () => {
+      const ws = (workspaces as any)
+      const current = (sessions as any)?.list?.getSnapshot?.()?.current
+      if (current !== undefined && typeof ws?.sessions?.clear === 'function') ws.sessions.clear()
+    }
+    const accessory = temporary
+      ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          props.accessory,
+          React.createElement('button', {
+            type: 'button',
+            'aria-label': '清除临时对话',
+            title: '清除临时对话',
+            onClick: clear,
+            style: { width: 24, height: 24, padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 14 },
+          }, '×'))
+      : props.accessory
     return React.createElement(nativeComposerOriginal, {
       ...props,
       disabled: temporary ? false : props.disabled,
       placeholder: temporary ? '选择一个工作区或直接开始临时对话' : props.placeholder,
+      accessory,
     })
   }
 }
 
+let nativeWorkspaceBrowserEntry: any = null
+let nativeWorkspaceBrowserOriginal: any = null
+/** Move the ungrouped group to the top of the native workspace tree. */
+function reorderTemporaryGroupFirst(node: any): any {
+  if (node === null || node === undefined || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(reorderTemporaryGroupFirst)
+  const props = node.props
+  if (props === undefined) return node
+  if (props.role === 'tree' && Array.isArray(props.children)) {
+    const groups = props.children
+    const idx = groups.findIndex((child: any) => containsText(child, '临时对话'))
+    if (idx > 0) {
+      const target = groups[idx]
+      const rest = groups.filter((_: any, i: number) => i !== idx)
+      return React.createElement(node.type, props, [target, ...rest])
+    }
+    return node
+  }
+  if (props.children !== undefined) {
+    return React.createElement(node.type, props, reorderTemporaryGroupFirst(props.children))
+  }
+  return node
+}
+function containsText(node: any, text: string): boolean {
+  if (typeof node === 'string') return node.includes(text)
+  if (node === null || node === undefined || typeof node !== 'object') return false
+  if (Array.isArray(node)) return node.some((child) => containsText(child, text))
+  return containsText(node.props?.children, text)
+}
+function installWorkspaceBrowserOverride(slots: any): void {
+  const entries = slots?.entries?.('sidebar.workspaces') ?? []
+  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeWorkspaceBrowserEntry)
+  if (!entry || nativeWorkspaceBrowserEntry === entry) return
+  nativeWorkspaceBrowserEntry = entry
+  nativeWorkspaceBrowserOriginal = entry.component
+  entry.component = (props: any) => {
+    const element = React.createElement(nativeWorkspaceBrowserOriginal, {
+      ...props,
+      t: (key: string, args?: any) => key === 'group.ungrouped' ? '临时对话' : props.t(key, args),
+    })
+    try { return reorderTemporaryGroupFirst(element) } catch { return element }
+  }
+}
 export function apply(ctx: ClientContext, config?: Config): void {
   runtime = ctx
   const fallbackRoot = config?.rootDirectory ?? ''
@@ -427,10 +487,11 @@ export function apply(ctx: ClientContext, config?: Config): void {
   const sessions = ctx.sessions as unknown as SessionsService | undefined
   if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
     originalStartSession = workspaces.startSession.bind(workspaces)
-    workspaces.startSession = (workspaceId?: string): void | Promise<void> => {
-      if (workspaceId === undefined) return autoCreateAndStart(workspaces, sessions, fallbackRoot)
-      originalStartSession!(workspaceId)
-      return undefined
+    // Every New Session gesture (top bar and sidebar rows) starts a temporary
+    // task conversation. Formal workspace sessions are still opened through
+    // the workspace picker / directory flow.
+    workspaces.startSession = (_workspaceId?: string): void | Promise<void> => {
+      return autoCreateAndStart(workspaces, sessions, fallbackRoot)
     }
   }
   suppressStartupAutoSelection(ctx.workspaces)
@@ -453,6 +514,7 @@ export function apply(ctx: ClientContext, config?: Config): void {
   // No competing composer slot entry is registered; the original DOM/props
   // contract remains intact and only temporary cwd-only sessions are unlocked.
   installNativeComposerOverride(ctx.slots, sessions, workspaces)
+  installWorkspaceBrowserOverride(ctx.slots)
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
   // the plugin's own fenced route. Guarded so older hosts without the
