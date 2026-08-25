@@ -212,25 +212,27 @@ const renderComponent = (element) => {
 }
 const owner = (open) => ({ open, busy: false, onPicked: () => {}, onCancel: () => {}, onError: () => {} })
 
-// Hero occupant, closed, no session -> default workspace state row.
-const defaultTree = renderComponent(heroReg.component(owner(false)))
-const defaultState = defaultTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
-if (defaultState?.props?.['data-timestamp-workspace-state'] !== 'default' || !defaultTree.some((node) => node === '默认工作区')) {
-  console.error('FAIL: closed hero occupant did not render the default workspace state')
-  process.exit(1)
-}
-if (defaultTree.some((node) => node === '选择已有工作区')) {
-  console.error('FAIL: closed hero occupant must not render the creation dialog')
+// Hero occupant, closed -> renders nothing (the host chip owns the closed
+// area; a parallel state row would duplicate it).
+if (renderComponent(heroReg.component(owner(false))).length !== 0) {
+  console.error('FAIL: closed hero occupant must render nothing')
   process.exit(1)
 }
 
-// Hero occupant, closed, session bound to a workspace -> title + clear button.
+// Hero occupant, open -> creation dialog with the current state line + clear.
 sessionStore = { current: 'session-1', byId: { 'session-1': { cwd: '/tmp/ws-1' } } }
-const selectedTree = renderComponent(heroReg.component(owner(false)))
-const selectedState = selectedTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
-const clearButton = selectedTree.find((node) => node?.props?.['aria-label'] === '取消当前工作区')
-if (selectedState?.props?.['data-timestamp-workspace-state'] !== 'selected' || !selectedTree.some((node) => node === '工作区：项目一') || !clearButton) {
-  console.error('FAIL: selected workspace state did not render the title and clear button')
+const openTree = renderComponent(heroReg.component(owner(true)))
+if (!openTree.some((node) => node === '选择已有工作区') || !openTree.some((node) => node === '自动创建时间戳工作区') || !openTree.some((node) => node === '取消')) {
+  console.error('FAIL: open hero occupant did not render the creation dialog actions')
+  process.exit(1)
+}
+if (!openTree.some((node) => node === '工作区：项目一')) {
+  console.error('FAIL: open dialog did not show the current workspace state line')
+  process.exit(1)
+}
+const clearButton = openTree.find((node) => node?.props?.['aria-label'] === '取消当前工作区')
+if (!clearButton) {
+  console.error('FAIL: open dialog did not render the clear button')
   process.exit(1)
 }
 clearButton.props.onClick()
@@ -238,33 +240,25 @@ if (calls.clear !== 1 || sessionStore.current !== undefined) {
   console.error(`FAIL: clear button did not clear the selection (clear=${calls.clear}, current=${sessionStore.current})`)
   process.exit(1)
 }
+sessionStore = { current: undefined, byId: {} }
 
-// Hero occupant, closed, temp task session (no workspace, cwd only) ->
-// labeled by its cwd folder name.
+// Hero occupant, open, temp task session (no workspace, cwd only) -> the
+// dialog state line is labeled by its cwd folder name.
 sessionStore = { current: 'temp-9', byId: { 'temp-9': { cwd: '/tmp/root/20260825120000' } } }
-const tempTree = renderComponent(heroReg.component(owner(false)))
-const tempState = tempTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
-if (tempState?.props?.['data-timestamp-workspace-state'] !== 'selected' || !tempTree.some((node) => node === '工作区：20260825120000')) {
-  console.error('FAIL: temp task session was not labeled by its cwd folder name')
+const tempOpenTree = renderComponent(heroReg.component(owner(true)))
+if (!tempOpenTree.some((node) => node === '工作区：20260825120000')) {
+  console.error('FAIL: temp task session was not labeled by its cwd folder name in the dialog')
   process.exit(1)
 }
 sessionStore = { current: undefined, byId: {} }
 
-// Hero occupant, open -> creation dialog.
-const openTree = renderComponent(heroReg.component(owner(true)))
-if (!openTree.some((node) => node === '选择已有工作区') || !openTree.some((node) => node === '自动创建时间戳工作区') || !openTree.some((node) => node === '取消')) {
-  console.error('FAIL: open hero occupant did not render the creation dialog actions')
-  process.exit(1)
-}
-
-// Sidebar occupant: closed renders nothing, open renders the dialog only.
+// Sidebar occupant: closed renders nothing, open renders the dialog.
 if (renderComponent(sideReg.component(owner(false))).length !== 0) {
   console.error('FAIL: closed sidebar occupant must render nothing')
   process.exit(1)
 }
-const sideOpen = renderComponent(sideReg.component(owner(true)))
-if (!sideOpen.some((node) => node === '自动创建时间戳工作区') || sideOpen.some((node) => node?.props?.['data-timestamp-workspace-state'])) {
-  console.error('FAIL: open sidebar occupant must render the dialog without the state row')
+if (!renderComponent(sideReg.component(owner(true))).some((node) => node === '自动创建时间戳工作区')) {
+  console.error('FAIL: open sidebar occupant must render the creation dialog')
   process.exit(1)
 }
 
@@ -426,4 +420,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders state row + clear + dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp task: timestamp folder + cwd-only ungrouped session, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp task: timestamp folder + cwd-only ungrouped session, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')

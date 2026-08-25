@@ -252,43 +252,6 @@ function clearWorkspaceSelection(workspaces: Pick<WorkspaceService, 'sessions'>)
   try { workspaces.sessions?.clear?.() } catch { /* keep the current view */ }
 }
 
-function WorkspaceState(props: {
-  selectedId?: string
-  selectedTitle?: string
-  status?: TaskStatus
-  clear: () => void
-}) {
-  const { selectedId, selectedTitle, status, clear } = props
-  const selected = selectedId !== undefined || selectedTitle !== undefined
-  return React.createElement('div', {
-    'data-timestamp-workspace-state': selected ? 'selected' : 'default',
-    style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
-  },
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-      React.createElement('span', { role: 'status', style: { fontSize: 13, opacity: selected ? 1 : 0.75 } },
-        selected ? `工作区：${selectedTitle || selectedId}` : '默认工作区'),
-      selected && React.createElement('button', {
-      type: 'button',
-      'aria-label': '取消当前工作区',
-      title: '取消当前工作区',
-      onClick: clear,
-      style: {
-        width: 24,
-        height: 24,
-        padding: 0,
-        border: 0,
-        borderRadius: 4,
-        background: 'transparent',
-        color: 'inherit',
-        cursor: 'pointer',
-        fontSize: 16,
-        lineHeight: '24px',
-      },
-    }, '×')),
-    status?.phase === 'busy' && React.createElement('span', { role: 'status', style: { fontSize: 12, opacity: 0.7 } }, '正在创建临时任务…'),
-    status?.phase === 'error' && React.createElement('div', { role: 'alert', style: { fontSize: 12, color: '#e5484d' } }, `临时任务创建失败：${status.message}`))
-}
-
 // The host owns the picker root ("conversation.hero.workspace") and already
 // declares its only child hole, the directory flow — the slot engine rejects
 // a second declaration of that child (a full root replacement is therefore
@@ -343,12 +306,17 @@ function useCurrentWorkspace(workspaces: WorkspaceService | undefined): { select
 function FlowDialog(props: {
   busy: boolean
   error: string | null
+  stateLine?: React.ReactNode
+  status?: TaskStatus
   onPick: () => void
   onCreate: () => void
   onCancel: () => void
 }) {
   return React.createElement('div', { role: 'dialog', 'aria-label': 'Workspace creation', style: { padding: 16, minWidth: 320 } },
     React.createElement('strong', null, '选择工作区'),
+    props.stateLine,
+    props.status?.phase === 'busy' && React.createElement('div', { role: 'status', style: { fontSize: 12, opacity: 0.7 } }, '正在创建临时任务…'),
+    props.status?.phase === 'error' && React.createElement('div', { role: 'alert', style: { fontSize: 12, color: '#e5484d' } }, `临时任务创建失败：${props.status.message}`),
     React.createElement('p', null, '可以选择已有目录；也可以自动创建按当前时间命名的新工作区。'),
     props.error && React.createElement('div', { role: 'alert', style: { color: '#b42318' } }, props.error),
     React.createElement('button', { disabled: props.busy, onClick: props.onPick }, props.busy ? '处理中…' : '选择已有工作区'),
@@ -356,8 +324,8 @@ function FlowDialog(props: {
     React.createElement('button', { disabled: props.busy, onClick: props.onCancel }, '取消'))
 }
 
-function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
-  const { owner, pick, create, root } = props
+function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces?: WorkspaceService | undefined }) {
+  const { owner, pick, create, root, workspaces } = props
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [rootDir, setRootDir] = React.useState<string>(root)
@@ -378,9 +346,23 @@ function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Pro
       .catch(() => { /* keep the yaml fallback */ })
     return () => { alive = false }
   }, [owner.open])
+  const selection = useCurrentWorkspace(workspaces)
+  const stateLine = selection.selectedId !== undefined || selection.selectedTitle !== undefined
+    ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+        React.createElement('span', { style: { fontSize: 13 } }, `工作区：${selection.selectedTitle || selection.selectedId}`),
+        React.createElement('button', {
+          type: 'button',
+          'aria-label': '取消当前工作区',
+          title: '取消当前工作区',
+          onClick: () => clearWorkspaceSelection(workspaces ?? {}),
+          style: { width: 22, height: 22, padding: 0, border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 14, lineHeight: '22px' },
+        }, '×'))
+    : null
   return FlowDialog({
     busy,
     error,
+    stateLine,
+    status: useTaskStatus(),
     onPick: () => run(pick),
     onCreate: () => run(() => createTimestampWorkspace(create, rootDir)),
     onCancel: owner.onCancel,
@@ -388,28 +370,21 @@ function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Pro
 }
 
 /**
- * Hero occupant: closed state shows the workspace state row + clear button
- * (the host renders this outlet next to its picker menu); open state hosts
- * the directory creation dialog.
+ * Hero occupant: renders only the directory creation dialog when the flow is
+ * open. Closed state renders nothing — the host's workspace chip owns that
+ * area, and a parallel state row would just duplicate it (the slot engine
+ * also forbids replacing the host picker root).
  */
 function HeroFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces: WorkspaceService | undefined }) {
   const { owner, workspaces } = props
-  const selection = useCurrentWorkspace(workspaces)
-  if (owner.open) {
-    return React.createElement(FlowDialogHost, { owner, pick: props.pick, create: props.create, root: props.root })
-  }
-  return React.createElement(WorkspaceState, {
-    selectedId: selection.selectedId,
-    selectedTitle: selection.selectedTitle,
-    status: useTaskStatus(),
-    clear: () => clearWorkspaceSelection(workspaces ?? {}),
-  })
+  if (!owner.open) return null
+  return React.createElement(FlowDialogHost, { owner, pick: props.pick, create: props.create, root: props.root, workspaces })
 }
 
 /** Sidebar occupant: creation dialog only (no state row in the sidebar). */
-function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
+function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces: WorkspaceService | undefined }) {
   if (!props.owner.open) return null
-  return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root })
+  return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root, workspaces: props.workspaces })
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
@@ -429,7 +404,7 @@ export function apply(ctx: ClientContext, config?: Config): void {
   const pick = () => ctx.workspaces.pickDirectory()
   const create = (root: string, name: string) => ctx.workspaces.createDirectory(root, name)
   const heroOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(HeroFlow, { owner, pick, create, root: fallbackRoot, workspaces })
-  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: fallbackRoot })
+  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: fallbackRoot, workspaces })
   const injected = () => ({})
   // The host (x6) already holds a priority-0 registration on both single
   // directory-flow holes; register at a lower priority to shadow it
