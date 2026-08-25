@@ -1,0 +1,8 @@
+# dsh-plugin-timestamp-workspace bundle patch: inserts the dual-face plugin
+# row into the web profile roster. Applied as a profile bundle layer (the
+# `dsh.bundle.patch` manifest field). The node half (exports ".") mounts the
+# settings route in the host process; the `dsh.client` declaration makes the
+# browser half (exports "./client") load in the web GUI.
+- insert:
+    - id: timestamp-workspace
+      name: dsh-plugin-timestamp-workspace
