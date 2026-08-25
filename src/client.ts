@@ -1,6 +1,5 @@
 import * as React from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
 
 export const name = 'timestamp-workspace-client'
 export const inject = ['slots', 'workspaces', 'sessions']
@@ -58,21 +57,9 @@ async function updateSettings(rootDirectory: string): Promise<void> {
 // through the apply-time context captured here.
 let runtime: ClientContext | null = null
 
-// The host resolves a parameterless startSession (top-bar / hero "new
-// conversation") as `currentWorkspaceId ?? recentWorkspaceId`, so a fresh
-// conversation silently inherits the last-used folder. That is a host
-// default no slot can reach, so we shadow the method on the live service
-// object: a parameterless New Session now starts a temporary task — a
-// timestamp folder under the configured root (`rootDirectory/yyyyMMddHHmmss`)
-// plus an ungrouped session bound to that cwd, NOT registered as a
-// workspace. The host blocks composer input while no session exists, so
-// this is what keeps the "don't pick, just chat" flow usable. Explicit
-// workspace targets (per-workspace New Session in the sidebar) still run
-// the original host logic. Guarded by a module-level flag so a hot reload
-// (apply re-run) does not double-wrap.
-let originalStartSession: ((workspaceId?: string) => void) | null = null
-
-let autoCreating = false
+// rootDirectory fallback from the patch-insert config (yaml). The live value
+// always comes from the settings route; this only backs a route failure.
+let fallbackRoot = ''
 
 type TaskStatus = { phase: 'idle' | 'busy' | 'error'; message?: string }
 let taskStatus: TaskStatus = { phase: 'idle' }
@@ -108,7 +95,14 @@ type SessionsService = {
   open: (sessionId: string) => void | Promise<void>
 }
 
-async function resolveRoot(fallbackRoot: string): Promise<string> {
+type WorkspaceService = {
+  sessions?: { clear?: () => void }
+  pickDirectory: () => Promise<string | null>
+  createDirectory: (root: string, name: string) => Promise<string>
+  archiveSession?: (sessionId: string) => void | Promise<void>
+}
+
+async function resolveRoot(): Promise<string> {
   try {
     const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
     if (settings.rootDirectory) return settings.rootDirectory
@@ -116,20 +110,19 @@ async function resolveRoot(fallbackRoot: string): Promise<string> {
   return fallbackRoot
 }
 
-async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sessions: SessionsService | undefined, fallbackRoot: string): Promise<void> {
-  if (autoCreating || !workspaces || !sessions) return
-  autoCreating = true
+async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sessions: SessionsService | undefined): Promise<void> {
+  if (!workspaces || !sessions) return
   setTaskStatus({ phase: 'busy' })
   try {
-    const root = await resolveRoot(fallbackRoot)
+    const root = await resolveRoot()
     const trimmed = root.trim()
     if (!trimmed) throw new Error('rootDirectory 未配置')
     // Auto-clean unused temporary tasks (blank, non-current) before creating a
-    // new one, so repeated New Session clicks never accumulate folders.
+    // new one, so repeated starts never accumulate folders.
     try {
       await cleanupUnusedTemporaryTasks(workspaces, sessions, trimmed)
     } catch { /* cleanup is best-effort */ }
-    console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
+    console.log('[timestamp-workspace] creating temp task folder under', trimmed)
     const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
     console.log('[timestamp-workspace] temp task folder ready:', path)
     const sessionId = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
@@ -138,50 +131,21 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
     setTaskStatus({ phase: 'idle' })
   } catch (reason) {
     // Temp-task setup failed (no root configured, same-second conflict,
-    // host rejection, timeout...): fall back to the workspace-less view and
-    // surface the reason in the hero state row (visible without DevTools).
+    // host rejection, timeout...): keep the current view and surface the
+    // reason next to the hero button (visible without DevTools).
     const message = reason instanceof Error ? reason.message : String(reason)
     console.warn('[timestamp-workspace] temp task start failed:', reason)
     setTaskStatus({ phase: 'error', message })
-  } finally {
-    autoCreating = false
   }
 }
 
-// The host's startInitialSelection runs synchronously inside the runtime
-// apply — before this plugin — and subscribes to the workspace projection,
-// waiting for the first ready baseline. Its only trigger is the projected
-// recentWorkspaceId: booting with no restored current session auto-connects
-// the last-used workspace, with no reachable handle to cancel that pending
-// reconcile. So we shadow the projection instead: masking recentWorkspaceId
-// on the very first ready baseline makes the reconcile settle as "done"
-// without connecting, landing startup on the workspace-less New Session
-// view — consistent with the startSession policy above. One-shot (the
-// reconcile settles exactly once), guarded so hot reload does not re-wrap.
-let startupMaskInstalled = false
-function suppressStartupAutoSelection(workspaces: unknown): void {
-  if (startupMaskInstalled) return
-  const ws = workspaces as {
-    list?: { set?: (next: Record<string, unknown>) => unknown }
-    sessions?: { list?: { getSnapshot?: () => { current?: unknown } } }
-  } | undefined
-  const list = ws?.list
-  const set = list?.set
-  const sessionsList = ws?.sessions?.list
-  const getSessionSnapshot = sessionsList?.getSnapshot
-  if (!list || typeof set !== 'function' || !sessionsList || typeof getSessionSnapshot !== 'function') return
-  startupMaskInstalled = true
-  list.set = (next: Record<string, unknown>): unknown => {
-    if (next.baselinesReady === true) {
-      // One-shot: the startup reconcile settles on the first ready
-      // projection, so restore the original setter right away.
-      list.set = set
-      if (getSessionSnapshot()?.current === undefined && next.recentWorkspaceId !== undefined) {
-        next = { ...next, recentWorkspaceId: undefined }
-      }
-    }
-    return set(next)
-  }
+/** The hero button action: a temporary task needs no workspace pick. */
+function startTemporaryTask(): void {
+  if (runtime === null) return
+  void autoCreateAndStart(
+    runtime.workspaces as unknown as WorkspaceService | undefined,
+    runtime.sessions as unknown as SessionsService | undefined,
+  )
 }
 
 function TimestampSettingsSection(props: { close?: () => void }) {
@@ -235,7 +199,7 @@ function TimestampSettingsSection(props: { close?: () => void }) {
 
   return React.createElement('div', { style: { padding: '4px 0', display: 'flex', flexDirection: 'column', gap: 12 } },
     React.createElement('p', { style: { margin: 0, fontSize: 13, opacity: 0.8 } },
-      '自动创建的时间戳工作区将生成在此根目录下（YYYYMMDDHHmmss 命名）。保存后立即生效，优先于 cordis.patch.yml 里的 rootDirectory 配置。'),
+      '开启临时会话时，将在此根目录下自动创建 YYYYMMDDHHmmss 命名的工作区文件夹。保存后立即生效，优先于 cordis.patch.yml 里的 rootDirectory 配置。'),
     loading
       ? React.createElement('p', { style: { margin: 0, fontSize: 13, opacity: 0.6 } }, '读取配置中…')
       : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
@@ -255,207 +219,6 @@ function TimestampSettingsSection(props: { close?: () => void }) {
           saved && React.createElement('div', { style: { fontSize: 13, color: '#30a46c' } }, '已保存')),
     props.close && React.createElement('button', { onClick: props.close }, '完成'))
 }
-
-type WorkspaceService = {
-  sessions?: { clear?: () => void }
-  startSession?: (workspaceId?: string) => void
-  pickDirectory: () => Promise<string | null>
-  createDirectory: (root: string, name: string) => Promise<string>
-  create: (input: { path: string }) => Promise<{ workspaceId: string }>
-}
-
-function clearWorkspaceSelection(workspaces: Pick<WorkspaceService, 'sessions'>): void {
-  try { workspaces.sessions?.clear?.() } catch { /* keep the current view */ }
-}
-
-// The host owns the picker root ("conversation.hero.workspace") and already
-// declares its only child hole, the directory flow — the slot engine rejects
-// a second declaration of that child (a full root replacement is therefore
-// impossible by design). Plugins contribute through the child hole only: the
-// host renders the flow outlet next to its menu, so the closed state of the
-// hero occupant can host the workspace state row + clear button, and the open
-// state hosts the directory creation dialog.
-type WorkspaceListStore = {
-  getSnapshot?: () => { items?: readonly { workspaceId: string; title: string; sessionIds?: readonly string[] }[] }
-  subscribe?: (listener: () => void) => () => void
-}
-type SessionListStore = {
-  getSnapshot?: () => { current?: string; byId?: Record<string, { cwd?: string; title?: string }> }
-  subscribe?: (listener: () => void) => () => void
-}
-
-/** Single path segment, host-style display label for a cwd. */
-function workspaceLabel(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, '')
-  const parts = trimmed.split(/[\\/]/)
-  return parts[parts.length - 1] || trimmed
-}
-
-/**
- * Current session's workspace, projected from the workspace list store.
- * Temporary (ungrouped) task sessions have no registered workspace, so
- * fall back to labeling them with their cwd folder name.
- */
-function useCurrentWorkspace(workspaces: WorkspaceService | undefined): { selectedId?: string; selectedTitle?: string } {
-  const list = (workspaces as unknown as { list?: WorkspaceListStore })?.list
-  const sessions = (workspaces as unknown as { sessions?: { list?: SessionListStore } })?.sessions?.list
-  const usable = typeof React.useSyncExternalStore === 'function'
-    && !!list?.getSnapshot && typeof list.subscribe === 'function'
-    && !!sessions?.getSnapshot && typeof sessions.subscribe === 'function'
-  // Hooks are called unconditionally; the store identity is stable per apply,
-  // so the usable flag cannot flip between renders.
-  const projection = usable
-    ? React.useSyncExternalStore((listener) => list.subscribe!(listener), () => list.getSnapshot!())
-    : undefined
-  const session = usable
-    ? React.useSyncExternalStore((listener) => sessions.subscribe!(listener), () => sessions.getSnapshot!())
-    : undefined
-  if (!projection || !session) return {}
-  const currentId = session?.current
-  const current = projection?.items?.find((item) => currentId !== undefined && item.sessionIds?.includes(currentId))
-  if (current) return { selectedId: current.workspaceId, selectedTitle: current.title }
-  const summary = currentId !== undefined ? session?.byId?.[currentId] : undefined
-  if (summary?.cwd) return { selectedTitle: workspaceLabel(summary.cwd) }
-  return {}
-}
-
-function FlowDialog(props: {
-  busy: boolean
-  error: string | null
-  stateLine?: React.ReactNode
-  status?: TaskStatus
-  onPick: () => void
-  onCreate: () => void
-  onCancel: () => void
-}) {
-  return React.createElement('div', { role: 'dialog', 'aria-label': 'Workspace creation', style: { padding: 16, minWidth: 320 } },
-    React.createElement('strong', null, '选择工作区'),
-    props.stateLine,
-    props.status?.phase === 'busy' && React.createElement('div', { role: 'status', style: { fontSize: 12, opacity: 0.7 } }, '正在创建临时任务…'),
-    props.status?.phase === 'error' && React.createElement('div', { role: 'alert', style: { fontSize: 12, color: '#e5484d' } }, `临时任务创建失败：${props.status.message}`),
-    React.createElement('p', null, '可以选择已有目录；也可以自动创建按当前时间命名的新工作区。'),
-    props.error && React.createElement('div', { role: 'alert', style: { color: '#b42318' } }, props.error),
-    React.createElement('button', { disabled: props.busy, onClick: props.onPick }, props.busy ? '处理中…' : '选择已有工作区'),
-    React.createElement('button', { disabled: props.busy, onClick: props.onCreate }, '自动创建时间戳工作区'),
-    React.createElement('button', { disabled: props.busy, onClick: props.onCancel }, '取消'))
-}
-
-function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces?: WorkspaceService | undefined }) {
-  const { owner, pick, create, root, workspaces } = props
-  const [busy, setBusy] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-  const [rootDir, setRootDir] = React.useState<string>(root)
-  const run = async (operation: () => Promise<string | null>) => {
-    if (busy) return
-    setBusy(true); setError(null)
-    try {
-      const path = await operation()
-      if (path) { console.log('[timestamp-workspace] flow picked path:', path); owner.onPicked(path) }
-      else { console.log('[timestamp-workspace] flow cancelled'); owner.onCancel() }
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason)
-      console.error('[timestamp-workspace] flow error:', reason)
-      setError(message)
-      owner.onError(message)
-    } finally { setBusy(false) }
-  }
-  // Re-resolve the root on every open so a settings-panel change takes
-  // effect without a reload; fall back to the yaml value on failure.
-  React.useEffect(() => {
-    let alive = true
-    fetchSettings()
-      .then((settings) => { if (alive && settings.rootDirectory) setRootDir(settings.rootDirectory) })
-      .catch(() => { /* keep the yaml fallback */ })
-    return () => { alive = false }
-  }, [owner.open])
-  const selection = useCurrentWorkspace(workspaces)
-  const stateLine = selection.selectedId !== undefined || selection.selectedTitle !== undefined
-    ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
-        React.createElement('span', { style: { fontSize: 13 } }, `工作区：${selection.selectedTitle || selection.selectedId}`),
-        React.createElement('button', {
-          type: 'button',
-          'aria-label': '取消当前工作区',
-          title: '取消当前工作区',
-          onClick: () => clearWorkspaceSelection(workspaces ?? {}),
-          style: { width: 22, height: 22, padding: 0, border: 0, borderRadius: 4, background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 14, lineHeight: '22px' },
-        }, '×'))
-    : null
-  return FlowDialog({
-    busy,
-    error,
-    stateLine,
-    status: useTaskStatus(),
-    onPick: () => run(pick),
-    onCreate: () => run(async () => {
-      // Resolve the root at click time (never trust the async state) so a
-      // fast open-and-create cannot hit an empty rootDirectory.
-      const currentRoot = await resolveRoot(props.root)
-      return createTimestampWorkspace(create, currentRoot)
-    }),
-    onCancel: owner.onCancel,
-  })
-}
-
-/**
- * Hero occupant: renders only the directory creation dialog when the flow is
- * open. Closed state renders nothing — the host's workspace chip owns that
- * area, and a parallel state row would just duplicate it (the slot engine
- * also forbids replacing the host picker root).
- */
-function HeroFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces: WorkspaceService | undefined }) {
-  const { owner, workspaces } = props
-  if (!owner.open) return null
-  return React.createElement(FlowDialogHost, { owner, pick: props.pick, create: props.create, root: props.root, workspaces })
-}
-
-/** Sidebar occupant: creation dialog only (no state row in the sidebar). */
-function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces: WorkspaceService | undefined }) {
-  if (!props.owner.open) return null
-  return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root, workspaces: props.workspaces })
-}
-
-/**
- * Keep the host InputBar entry, including its children declaration and inject
- * contract, and wrap only its component at runtime. This preserves the exact
- * native DOM, styles, attachments, model controls, keyboard handling, draft
- * machine, and submit behavior without registering a competing slot entry.
- */
-function isTemporarySessionProps(props: any, sessions: unknown, workspaces: unknown): boolean {
-  const sessionId = props.sessionId
-  const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
-  const workspaceState = props.useWorkspaces?.((state: any) => state) ?? (workspaces as any)?.list?.getSnapshot?.()
-  const summary = sessionId === undefined ? undefined : sessionState?.byId?.[sessionId]
-  const registered = sessionId !== undefined && (workspaceState?.items ?? []).some((item: any) => item.sessionIds?.includes(sessionId))
-  return !!summary?.cwd && !registered
-}
-
-let nativeComposerEntry: any = null
-let nativeComposerOriginal: any = null
-function installNativeComposerOverride(slots: any, sessions: unknown, workspaces: unknown): void {
-  const entries = slots?.entries?.('conversation.composer.bar') ?? []
-  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeComposerEntry)
-  if (!entry || nativeComposerEntry === entry) return
-  nativeComposerEntry = entry
-  nativeComposerOriginal = entry.component
-  entry.component = (props: any) => {
-    const temporary = isTemporarySessionProps(props, sessions, workspaces)
-    const placeholder = props.placeholder === '选择一个工作区开始' || props.placeholder === 'Choose a workspace to start'
-      ? '选择一个工作区或以临时会话开始'
-      : props.placeholder
-    return React.createElement(nativeComposerOriginal, {
-      ...props,
-      disabled: temporary ? false : props.disabled,
-      placeholder,
-    })
-  }
-}
-
-/**
- * Mark the host's ungrouped group (React key === "") with a data attribute so
- * the DOM placement and CSS can target it without guessing labels. A real
- * workspace whose title happens to be "未分组" keeps its own key and is never
- * marked.
- */
 
 async function requestCleanup(paths: string[]): Promise<boolean> {
   try {
@@ -540,6 +303,86 @@ async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any, rootO
 }
 
 /**
+ * Keep the host InputBar entry, including its children declaration and inject
+ * contract, and wrap only its component at runtime. This preserves the exact
+ * native DOM, styles, attachments, model controls, keyboard handling, draft
+ * machine, and submit behavior without registering a competing slot entry.
+ */
+function isTemporarySessionProps(props: any, sessions: unknown, workspaces: unknown): boolean {
+  const sessionId = props.sessionId
+  const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
+  const workspaceState = props.useWorkspaces?.((state: any) => state) ?? (workspaces as any)?.list?.getSnapshot?.()
+  const summary = sessionId === undefined ? undefined : sessionState?.byId?.[sessionId]
+  const registered = sessionId !== undefined && (workspaceState?.items ?? []).some((item: any) => item.sessionIds?.includes(sessionId))
+  return !!summary?.cwd && !registered
+}
+
+let nativeComposerEntry: any = null
+let nativeComposerOriginal: any = null
+function installNativeComposerOverride(slots: any, sessions: unknown, workspaces: unknown): void {
+  const entries = slots?.entries?.('conversation.composer.bar') ?? []
+  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeComposerEntry)
+  if (!entry || nativeComposerEntry === entry) return
+  nativeComposerEntry = entry
+  nativeComposerOriginal = entry.component
+  entry.component = (props: any) => {
+    const temporary = isTemporarySessionProps(props, sessions, workspaces)
+    const placeholder = props.placeholder === '选择一个工作区开始' || props.placeholder === 'Choose a workspace to start'
+      ? '选择一个工作区或以临时会话开始'
+      : props.placeholder
+    return React.createElement(nativeComposerOriginal, {
+      ...props,
+      disabled: temporary ? false : props.disabled,
+      placeholder,
+    })
+  }
+}
+
+/**
+ * The hero's "choose a workspace" row (host ConversationRoot) renders the
+ * conversation.hero.workspace slot next to the WorkspaceChip. We keep the host
+ * entry (its root slot is owned and its directory-flow child is host-declared,
+ * so a root replacement is impossible by design) and wrap only its component:
+ * a "开启临时会话" button renders alongside the chip and starts a temporary
+ * task directly, while the host picker keeps its native menu/add flow.
+ */
+let nativeWorkspacePickerEntry: any = null
+let nativeWorkspacePickerOriginal: any = null
+
+function HeroTempButton(props: { status: TaskStatus; onStart: () => void }) {
+  const busy = props.status.phase === 'busy'
+  return React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', minWidth: 0 } },
+    React.createElement('button', {
+      type: 'button',
+      className: 'dsh-timestamp-hero-temp-button',
+      title: '创建一个以当前时间命名目录的临时会话，无需选择工作区',
+      disabled: busy,
+      onClick: props.onStart,
+    }, busy ? '创建中…' : '开启临时会话'),
+    props.status.phase === 'error' && props.status.message
+      ? React.createElement('span', { role: 'alert', className: 'dsh-timestamp-hero-temp-error' }, props.status.message)
+      : null,
+  )
+}
+
+function WorkspacePickerWrapper(props: any) {
+  const status = useTaskStatus()
+  return React.createElement(React.Fragment, null,
+    React.createElement(HeroTempButton, { status, onStart: startTemporaryTask }),
+    nativeWorkspacePickerOriginal === null ? null : React.createElement(nativeWorkspacePickerOriginal, props),
+  )
+}
+
+function installWorkspacePickerOverride(slots: any): void {
+  const entries = slots?.entries?.('conversation.hero.workspace') ?? []
+  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeWorkspacePickerEntry)
+  if (!entry || nativeWorkspacePickerEntry === entry) return
+  nativeWorkspacePickerEntry = entry
+  nativeWorkspacePickerOriginal = entry.component
+  entry.component = (props: any) => React.createElement(WorkspacePickerWrapper, props)
+}
+
+/**
  * Wrap the native WorkspaceBrowser and, after every committed render, detect
  * the ungrouped group by stable DOM signals (draggable="false" project row, no
  * workspace-actions button), pin it to the top of the tree, mark it, and give
@@ -591,17 +434,8 @@ function WorkspaceBrowserOrderWrapper(props: any) {
         const next = `${base} (${ungroupedCount})`
         if (title.textContent !== next) title.textContent = next
       }
-      // The host onCreate is a no-op for the ungrouped bucket (source:
-      // WorkspaceBrowser onCreate guards on workspaceId !== undefined), so the
-      // trailing + button binds a new temporary task instead. Idempotent via a
-      // data marker; React rebuilds the button on re-render and we rebind.
-      const plus = row.querySelector('button[aria-label*="新建会话"]')
-      if (plus !== null && !plus.hasAttribute('data-timestamp-temp-plus')) {
-        plus.setAttribute('data-timestamp-temp-plus', '')
-        plus.addEventListener('click', () => {
-          try { (runtime as any)?.workspaces?.startSession?.() } catch { /* host may be tearing down */ }
-        })
-      }
+      // Blank placeholder rows in the ungrouped bucket are the temporary
+      // tasks started from the hero button; label them for clarity.
       for (const rowEl of Array.from(group.querySelectorAll('[role="treeitem"]'))) {
         const title = Array.from(rowEl.querySelectorAll('span')).find((s) => (s.textContent ?? '').trim() === '新会话')
         if (title !== undefined && title !== null) title.textContent = '新的临时会话'
@@ -620,7 +454,13 @@ function installUngroupedStyle(): void {
   if (typeof document === 'undefined' || document.getElementById(UNGROUPED_STYLE_ID) !== null) return
   const style = document.createElement('style')
   style.id = UNGROUPED_STYLE_ID
-  style.textContent = '[data-timestamp-ungrouped]{font-style:italic;border:1px dashed var(--dsw-alias-border-l3);border-radius:12px;margin:0;padding:2px}'
+  style.textContent = [
+    '[data-timestamp-ungrouped]{font-style:italic;border:1px dashed var(--dsw-alias-border-l3);border-radius:12px;margin:0;padding:2px}',
+    '.dsh-timestamp-hero-temp-button{display:inline-flex;align-items:center;gap:4px;min-height:28px;margin-left:8px;padding:0 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:16px;background:transparent;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;font-weight:500;cursor:pointer;white-space:nowrap}',
+    '.dsh-timestamp-hero-temp-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+    '.dsh-timestamp-hero-temp-button:disabled{opacity:.6;cursor:default}',
+    '.dsh-timestamp-hero-temp-error{font-size:12px;line-height:16px;color:var(--dsw-alias-state-error-primary);margin-left:8px}',
+  ].join('\n')
   document.head.appendChild(style)
 }
 function installWorkspaceBrowserOverride(slots: any): void {
@@ -635,44 +475,15 @@ function installWorkspaceBrowserOverride(slots: any): void {
 
 export function apply(ctx: ClientContext, config?: Config): void {
   runtime = ctx
-  const fallbackRoot = config?.rootDirectory ?? ''
+  fallbackRoot = config?.rootDirectory ?? ''
   const workspaces = ctx.workspaces as unknown as WorkspaceService | undefined
   const sessions = ctx.sessions as unknown as SessionsService | undefined
-  if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
-    originalStartSession = workspaces.startSession.bind(workspaces)
-    // New Session always starts a temporary task; rapid repeated clicks are
-    // serialized (queued), so each click creates and opens one more temp
-    // conversation instead of being dropped or clearing the current view.
-    // Parameterless New Session starts a temporary conversation whose working
-    // directory is rootDirectory itself — no timestamp subfolder is created
-    // (host fixes cwd at session birth and eagerly mkdirs it, so a dedicated
-    // folder cannot be deferred to first send). Explicit targets still run the
-    // original host logic.
-    workspaces.startSession = (workspaceId?: string): void | Promise<void> => {
-      if (workspaceId === undefined) return autoCreateAndStart(workspaces, sessions, fallbackRoot)
-      originalStartSession!(workspaceId)
-      return undefined
-    }
-  }
-  suppressStartupAutoSelection(ctx.workspaces)
-  const pick = () => ctx.workspaces.pickDirectory()
-  const create = (root: string, name: string) => ctx.workspaces.createDirectory(root, name)
-  const heroOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(HeroFlow, { owner, pick, create, root: fallbackRoot, workspaces })
-  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: fallbackRoot, workspaces })
-  const injected = () => ({})
-  // The host (x6) already holds a priority-0 registration on both single
-  // directory-flow holes; register at a lower priority to shadow it
-  // (ascending priority, lowest renders). We contribute occupants only — the
-  // child holes are declared by the host's picker entry and must not be
-  // redeclared (the slot engine rejects duplicate child declarations).
-  ctx.slots.inject('conversation.hero.workspace.directoryFlow', () => ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
-    yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', inject: injected, priority: -1 }, heroOccupant)
-    yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, sidebarOccupant)
-  }))
 
-  // Keep the host's composer.bar registration and wrap its component in place.
-  // No competing composer slot entry is registered; the original DOM/props
-  // contract remains intact and only temporary cwd-only sessions are unlocked.
+  // New Session stays the host's original flow (choose a workspace). The
+  // plugin only adds the hero "开启临时会话" button next to the picker chip.
+  installWorkspacePickerOverride(ctx.slots)
+  // Temporary (cwd-only, ungrouped) sessions have no workspace chip, so the
+  // host would lock their composer; unlock exactly those sessions in place.
   installNativeComposerOverride(ctx.slots, sessions, workspaces)
   installWorkspaceBrowserOverride(ctx.slots)
   installCleanupOnArchive(workspaces, sessions)

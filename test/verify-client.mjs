@@ -3,13 +3,17 @@
  * 1. bundle executed as a classic script registers the loader entry,
  * 2. loader id === package name,
  * 3. factory() yields module.exports with name / inject / apply,
- * 4. apply(ctx) wires the slots without throwing — including the real slot
- *    engine's rule that a child slot may only be declared once (the host
- *    declares the directory-flow holes first; a plugin that redeclares them
- *    in a root replacement must fail to apply),
- * 5. the hero directory-flow occupant renders the workspace state row (closed)
- *    and the creation dialog (open); the sidebar occupant renders only the
- *    dialog; the settings.section registration is present with a component.
+ * 4. apply(ctx) wires the slots without throwing,
+ * 5. New Session is NOT hijacked: workspaces.startSession keeps the host fn,
+ *    and no directory-flow occupant is registered (the host native add-flow
+ *    is restored),
+ * 6. the hero workspace-picker entry is wrapped in place: the wrapper renders
+ *    the "开启临时会话" button next to the host picker, and clicking it creates
+ *    a timestamp folder under the root + a cwd-only session and opens it
+ *    (failures keep the current view, no clear),
+ * 7. the sidebar workspace-browser entry is wrapped (ungrouped pin/badge) and
+ *    the composer.bar entry is wrapped (temporary sessions unlocked),
+ * 8. the settings.section registration is present with a component.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -34,6 +38,8 @@ const reactStub = {
   }),
   useState: (initial) => [initial, () => {}],
   useEffect: () => {},
+  useLayoutEffect: () => {},
+  useRef: () => ({ current: null }),
   useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
   createContext: () => ({}),
 }
@@ -70,32 +76,23 @@ if (problems.length) {
   process.exit(1)
 }
 
-// --- Slot registry stub enforcing the real engine's declaration rules ---
-const declaredChildren = new Map() // childKey -> parent entry name
+// --- Slot registry stub: entries() lets plugins wrap host entries in place ---
 const registrations = []
 const injectedSlots = []
 const registeredSections = []
 const registry = {
+  entries(name) {
+    return registrations.filter((entry) => entry.desc.name === name)
+  },
   inject(name, factory) {
     injectedSlots.push(name)
     const result = factory()
-    // The directoryFlow double-inject passes a generator; run every yield so
-    // its register() calls land in the ledger.
     if (result && typeof result.next === 'function') {
       for (let step = result.next(); !step.done; step = result.next()) { /* disposers ignored */ }
     }
     return () => {}
   },
   register(desc, component) {
-    // Real engine: a child slot may only be declared once, ever.
-    if (desc.children) {
-      for (const childKey of Object.keys(desc.children)) {
-        if (declaredChildren.has(childKey)) {
-          throw new Error(`slot "${childKey}" is already declared (by ${declaredChildren.get(childKey)})`)
-        }
-      }
-      for (const childKey of Object.keys(desc.children)) declaredChildren.set(childKey, desc.name)
-    }
     registrations.push({ desc, component })
     if (desc && desc.name === 'settings.section') {
       registeredSections.push({ id: desc.id, label: desc.label(), hasComponent: typeof component === 'function' })
@@ -104,13 +101,14 @@ const registry = {
   },
 }
 
-// --- Workspace service stub (mirrors the runtime store contract) ---
+// --- Workspace / session service stubs (mirror the runtime store contract) ---
 let workspaceStore = {
   items: [{ workspaceId: 'ws-1', title: '项目一', sessionIds: ['session-1'] }],
   baselinesReady: true,
   recentWorkspaceId: undefined,
+  archivedSessionIds: [],
 }
-let sessionStore = { current: undefined, byId: {} }
+let sessionStore = { current: undefined, byId: {}, ids: [] }
 const calls = { originalStartSession: [], clear: 0 }
 const originalStartSession = (workspaceId) => { calls.originalStartSession.push(workspaceId) }
 const workspacesStub = {
@@ -118,7 +116,7 @@ const workspacesStub = {
   sessions: {
     clear: () => {
       calls.clear += 1
-      sessionStore = { current: undefined, byId: {} }
+      sessionStore = { current: undefined, byId: {}, ids: [] }
     },
     list: {
       getSnapshot: () => sessionStore,
@@ -126,13 +124,11 @@ const workspacesStub = {
     },
   },
   list: {
-    set(next) { workspaceStore = next },
     getSnapshot: () => workspaceStore,
     subscribe: () => () => {},
   },
   pickDirectory: async () => '/tmp/root',
   createDirectory: async (root, name) => `${root}/${name}`,
-  create: async ({ path }) => ({ workspaceId: `created:${path}` }),
   archiveSession: async () => {},
 }
 const sessionCalls = []
@@ -146,63 +142,74 @@ const sessionsStub = {
 
 const ctxStub = { slots: registry, workspaces: workspacesStub, sessions: sessionsStub }
 
-// The host bundle (dsh-client-ui-workspace) declares the picker root and its
-// directory-flow child FIRST, exactly like the real app. A plugin that
-// redeclares the child (full root replacement) must fail apply() here.
+// Host entries registered BEFORE the plugin applies, exactly like the app:
+// the picker root (with its host-declared directory-flow child), the sidebar
+// browser, and the composer bar.
+const hostHeroComponent = () => null
+const hostSidebarComponent = () => null
+const hostComposerComponent = (props) => props
 registry.register({
   name: 'conversation.hero.workspace',
   children: { 'conversation.hero.workspace.directoryFlow': { kind: 'single', scope: 'root' } },
   inject: () => ({}),
   locale: 'workspace',
-}, () => null)
+}, hostHeroComponent)
 registry.register({
   name: 'sidebar.workspaces',
   children: { 'sidebar.workspaces.directoryFlow': { kind: 'single', scope: 'root' } },
   inject: () => ({}),
   locale: 'workspace',
-}, () => null)
+}, hostSidebarComponent)
+registry.register({
+  name: 'conversation.composer.bar',
+  inject: () => ({}),
+}, hostComposerComponent)
 const hostRegistrationCount = registrations.length
 
 try {
   mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 } catch (error) {
-  console.error(`FAIL: apply() threw (a root replacement redeclaring a host child slot would land here): ${error.message}`)
+  console.error(`FAIL: apply() threw: ${error.message}`)
   process.exit(1)
 }
-const pluginRegistrations = registrations.slice(hostRegistrationCount)
 
-if (!injectedSlots.includes('conversation.hero.workspace.directoryFlow') || !injectedSlots.includes('sidebar.workspaces.directoryFlow')) {
-  console.error(`FAIL: directoryFlow slots not injected (got ${JSON.stringify(injectedSlots)})`)
+const heroEntry = registry.entries('conversation.hero.workspace')[0]
+const sidebarEntry = registry.entries('sidebar.workspaces')[0]
+const composerEntry = registry.entries('conversation.composer.bar')[0]
+if (!heroEntry || heroEntry.component === hostHeroComponent) {
+  console.error('FAIL: hero workspace-picker entry was not wrapped in place')
   process.exit(1)
 }
-if (!injectedSlots.includes('settings.section')) {
-  console.error(`FAIL: settings.section not injected (got ${JSON.stringify(injectedSlots)})`)
+if (!sidebarEntry || sidebarEntry.component === hostSidebarComponent) {
+  console.error('FAIL: sidebar workspace-browser entry was not wrapped in place')
+  process.exit(1)
+}
+if (!composerEntry || composerEntry.component === hostComposerComponent) {
+  console.error('FAIL: composer.bar entry was not wrapped in place')
+  process.exit(1)
+}
+
+// New Session is NOT hijacked: the host method object is untouched, and no
+// directory-flow occupant (or root replacement) is registered by the plugin.
+if (workspacesStub.startSession !== originalStartSession) {
+  console.error('FAIL: workspaces.startSession was shadowed (New Session must keep host logic)')
+  process.exit(1)
+}
+if (injectedSlots.includes('conversation.hero.workspace.directoryFlow') || injectedSlots.includes('sidebar.workspaces.directoryFlow')) {
+  console.error(`FAIL: plugin must not occupy the directory-flow holes (got ${JSON.stringify(injectedSlots)})`)
   process.exit(1)
 }
 if (injectedSlots.includes('conversation.hero.workspace')) {
   console.error('FAIL: plugin must not inject a root replacement of conversation.hero.workspace')
   process.exit(1)
 }
-if (pluginRegistrations.some((entry) => entry.desc?.name === 'conversation.hero.workspace')) {
-  console.error('FAIL: plugin must not register a conversation.hero.workspace root entry')
+const pluginRegistrations = registrations.slice(hostRegistrationCount)
+if (pluginRegistrations.some((entry) => entry.desc?.name === 'conversation.hero.workspace' || entry.desc?.name === 'sidebar.workspaces')) {
+  console.error('FAIL: plugin must not register competing root entries')
   process.exit(1)
 }
 
-const heroReg = pluginRegistrations.find((entry) => entry.desc?.name === 'conversation.hero.workspace.directoryFlow')
-const sideReg = pluginRegistrations.find((entry) => entry.desc?.name === 'sidebar.workspaces.directoryFlow')
-if (!heroReg || typeof heroReg.component !== 'function') {
-  console.error('FAIL: hero directoryFlow occupant not registered with a component')
-  process.exit(1)
-}
-if (!sideReg || typeof sideReg.component !== 'function') {
-  console.error('FAIL: sidebar directoryFlow occupant not registered with a component')
-  process.exit(1)
-}
-if ((heroReg.desc.priority ?? 0) !== -1 || (sideReg.desc.priority ?? 0) !== -1) {
-  console.error(`FAIL: occupants must shadow the host at priority -1 (hero=${heroReg.desc.priority}, side=${sideReg.desc.priority})`)
-  process.exit(1)
-}
-
+// --- Render helper (walks the createElement tree) ---
 const renderComponent = (element) => {
   if (element === null || element === false || element === undefined) return []
   if (Array.isArray(element)) return element.flatMap(renderComponent)
@@ -211,82 +218,29 @@ const renderComponent = (element) => {
   const children = element.props?.children
   return [element, ...renderComponent(children)]
 }
-const owner = (open) => ({ open, busy: false, onPicked: () => {}, onCancel: () => {}, onError: () => {} })
 
-// Hero occupant, closed -> renders nothing (host-native blank state).
-if (renderComponent(heroReg.component(owner(false))).length !== 0) {
-  console.error('FAIL: closed hero occupant must render nothing')
+// --- Hero picker wrapper: the "开启临时会话" button next to the host picker ---
+const heroTree = renderComponent(heroEntry.component({ open: false, onPick: () => {}, onClose: () => {} }))
+const tempButton = heroTree.find((node) => node?.type === 'button' && node?.props?.className === 'dsh-timestamp-hero-temp-button')
+if (!tempButton) {
+  console.error('FAIL: hero wrapper did not render the "开启临时会话" button')
   process.exit(1)
 }
-
-// Hero occupant, open -> creation dialog with the current state line + clear.
-sessionStore = { current: 'session-1', byId: { 'session-1': { cwd: '/tmp/ws-1' } } }
-const openTree = renderComponent(heroReg.component(owner(true)))
-if (!openTree.some((node) => node === '选择已有工作区') || !openTree.some((node) => node === '自动创建时间戳工作区') || !openTree.some((node) => node === '取消')) {
-  console.error('FAIL: open hero occupant did not render the creation dialog actions')
-  process.exit(1)
-}
-if (!openTree.some((node) => node === '工作区：项目一')) {
-  console.error('FAIL: open dialog did not show the current workspace state line')
-  process.exit(1)
-}
-const clearButton = openTree.find((node) => node?.props?.['aria-label'] === '取消当前工作区')
-if (!clearButton) {
-  console.error('FAIL: open dialog did not render the clear button')
-  process.exit(1)
-}
-clearButton.props.onClick()
-if (calls.clear !== 1 || sessionStore.current !== undefined) {
-  console.error(`FAIL: clear button did not clear the selection (clear=${calls.clear}, current=${sessionStore.current})`)
-  process.exit(1)
-}
-sessionStore = { current: undefined, byId: {} }
-
-// Hero occupant, open, temp task session (no workspace, cwd only) -> the
-// dialog state line is labeled by its cwd folder name.
-sessionStore = { current: 'temp-9', byId: { 'temp-9': { cwd: '/tmp/root/20260825120000' } } }
-const tempOpenTree = renderComponent(heroReg.component(owner(true)))
-if (!tempOpenTree.some((node) => node === '工作区：20260825120000')) {
-  console.error('FAIL: temp task session was not labeled by its cwd folder name in the dialog')
-  process.exit(1)
-}
-sessionStore = { current: undefined, byId: {} }
-
-// Sidebar occupant: closed renders nothing, open renders the dialog.
-if (renderComponent(sideReg.component(owner(false))).length !== 0) {
-  console.error('FAIL: closed sidebar occupant must render nothing')
-  process.exit(1)
-}
-if (!renderComponent(sideReg.component(owner(true))).some((node) => node === '自动创建时间戳工作区')) {
-  console.error('FAIL: open sidebar occupant must render the creation dialog')
+if (tempButton.props.disabled === true || tempButton.props.children !== '开启临时会话') {
+  console.error(`FAIL: hero button wrong state (disabled=${tempButton.props.disabled}, text=${tempButton.props.children})`)
   process.exit(1)
 }
 
-const section = registeredSections.find((s) => s.id === 'timestamp-workspace')
-if (!section) {
-  console.error(`FAIL: settings.section "timestamp-workspace" not registered (got ${JSON.stringify(registeredSections)})`)
-  process.exit(1)
-}
-if (!section.hasComponent) {
-  console.error('FAIL: settings.section registered without a render component')
-  process.exit(1)
-}
-
-// startSession shadowing: a parameterless New Session creates a timestamp
-// subfolder under the root plus an ungrouped cwd-only session and opens it.
-// Explicit targets still run the host logic.
-if (typeof workspacesStub.startSession !== 'function' || workspacesStub.startSession === originalStartSession) {
-  console.error('FAIL: workspaces.startSession was not shadowed')
-  process.exit(1)
-}
+// Click the button: timestamp folder under the root + cwd-only session + open.
 const createCalls = []
 const createDirectoryStub = async (root, name) => { createCalls.push({ root, name }); return `${root}/${name}` }
-const clearBeforeAuto = calls.clear
 workspacesStub.createDirectory = createDirectoryStub
 const sessionCallsBefore = sessionCalls.length
-await workspacesStub.startSession()
+const clearBefore = calls.clear
+tempButton.props.onClick()
+await new Promise((resolve) => setTimeout(resolve, 25))
 if (createCalls.length !== 1 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
-  console.error(`FAIL: temp task did not create a timestamp folder under the root (got ${JSON.stringify(createCalls[0])})`)
+  console.error(`FAIL: temp task did not create a timestamp folder under the root (got ${JSON.stringify(createCalls)})`)
   process.exit(1)
 }
 const createdSession = sessionCalls[sessionCallsBefore]
@@ -303,95 +257,84 @@ if (calls.originalStartSession.length !== 0) {
   console.error(`FAIL: temp task must not forward to the host startSession (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-if (calls.clear !== clearBeforeAuto) {
+if (calls.clear !== clearBefore) {
   console.error('FAIL: successful temp task must not clear the selection')
   process.exit(1)
 }
-// Hero occupant closed renders nothing (UI unchanged)
-if (renderComponent(heroReg.component(owner(false))).length !== 0) {
-  console.error('FAIL: closed hero occupant must render nothing')
-  process.exit(1)
-}
-// explicit target forwards to the host logic unchanged
-workspacesStub.startSession('ws-1')
-if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !== 'ws-1') {
-  console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
-  process.exit(1)
-}
-// failure path: a failing folder create keeps the current view (no clear)
+
+// Failure path: a failing folder create keeps the view and surfaces an error
+// next to the button (no session created, no clear).
 const sessionCallsAtFail = sessionCalls.length
 workspacesStub.createDirectory = async () => { throw new Error('boom') }
-await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto || sessionCalls.length !== sessionCallsAtFail) {
+tempButton.props.onClick()
+await new Promise((resolve) => setTimeout(resolve, 25))
+if (calls.clear !== clearBefore || sessionCalls.length !== sessionCallsAtFail) {
   console.error(`FAIL: failed temp task must keep the view without creating (clear=${calls.clear})`)
   process.exit(1)
 }
-// failure path: sessions.create rejection also keeps view
-const sessionsCreateStub = sessionsStub.create
-sessionsStub.create = async () => { throw new Error('session boom') }
+const errorTree = renderComponent(heroEntry.component({ open: false }))
+const alertSpan = errorTree.find((node) => node?.type === 'span' && node?.props?.role === 'alert')
+if (!alertSpan || !String(alertSpan.props.children).includes('boom')) {
+  console.error(`FAIL: temp task failure was not surfaced next to the hero button (got ${JSON.stringify(alertSpan?.props?.children)})`)
+  process.exit(1)
+}
 workspacesStub.createDirectory = createDirectoryStub
-await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto) {
-  console.error(`FAIL: failed session create must not clear the selection (clear=${calls.clear})`)
-  process.exit(1)
-}
-sessionsStub.create = sessionsCreateStub
-// Idempotent: a second apply() must not wrap the method again — no-arg still
-// creates a temp task.
-const sessionCallsBeforeReapply = sessionCalls.length
+
+// Re-apply is idempotent: the hero entry is not double-wrapped.
+const heroComponentBefore = heroEntry.component
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
-await workspacesStub.startSession()
-if (sessionCalls.length !== sessionCallsBeforeReapply + 2) {
-  console.error('FAIL: re-apply double-wrapped startSession')
+if (heroEntry.component !== heroComponentBefore) {
+  console.error('FAIL: re-apply double-wrapped the hero picker entry')
+  process.exit(1)
+}
+if (workspacesStub.startSession !== originalStartSession) {
+  console.error('FAIL: re-apply shadowed workspaces.startSession')
   process.exit(1)
 }
 
-// Startup auto-selection suppression: the host startInitialSelection
-// reconcile only connects when the first ready projection carries a
-// recentWorkspaceId and no current session is restored. The mask must
-// blank recentWorkspaceId on that first ready projection, then restore
-// the original setter (one-shot) so later projections pass through.
-// The masks are module-level one-shots already consumed by the main apply,
-// so this phase runs against a fresh module instance.
-let startupRegistered = null
-new Function('window', 'require', code)({ __ModuleLoader__: { load(entry) { startupRegistered = entry } } }, requireStub)
-const startupMod = startupRegistered.factory(requireStub)
-const setCalls = []
-let storeState = { baselinesReady: false, recentWorkspaceId: 'ws-recent' }
-const startupCtx = {
-  slots: { inject() {}, register() { return () => {} } },
-  workspaces: {
-    startSession: () => {},
-    sessions: { clear: () => {}, list: { getSnapshot: () => ({ current: undefined }) } },
-    list: {
-      set(next) { setCalls.push(next); storeState = next },
-      getSnapshot: () => storeState,
-    },
-    pickDirectory: async () => '/tmp/root',
-    createDirectory: async (root, name) => `${root}/${name}`,
-    create: async ({ path }) => ({ workspaceId: `created:${path}` }),
-  archiveSession: async () => {},
-  },
-}
-startupMod.apply(startupCtx, { rootDirectory: '/tmp/root' })
-// first ready projection (cold boot, no restored session)
-startupCtx.workspaces.list.set({ ...storeState, baselinesReady: true, recentWorkspaceId: 'ws-recent' })
-if (setCalls.length !== 1 || setCalls[0].recentWorkspaceId !== undefined) {
-  console.error(`FAIL: first ready projection did not mask recentWorkspaceId (got ${JSON.stringify(setCalls[0])})`)
+// --- Composer bar wrapper: temporary (cwd-only, ungrouped) sessions unlock ---
+sessionStore = { current: 'temp-9', byId: { 'temp-9': { cwd: '/tmp/root/20260825120000' } }, ids: ['temp-9'] }
+// The host composer stub is (props) => props; the wrapper renders it via
+// createElement, so walk the tree to reach the composed props object. The
+// real host passes useSessions/useWorkspaces selector hooks in the props.
+const composerProps = (sessionId) => ({
+  sessionId,
+  disabled: true,
+  placeholder: sessionId === 'temp-9' ? '选择一个工作区开始' : '选择工作区',
+  useSessions: (selector) => selector(sessionStore),
+  useWorkspaces: (selector) => selector(workspaceStore),
+})
+const composed = renderComponent(composerEntry.component(composerProps('temp-9')))[0]
+if (composed.disabled !== false) {
+  console.error('FAIL: temporary session composer stayed disabled')
   process.exit(1)
 }
-// later projection (user activity) passes through unchanged
-startupCtx.workspaces.list.set({ baselinesReady: true, recentWorkspaceId: 'ws-other' })
-if (setCalls.length !== 2 || setCalls[1].recentWorkspaceId !== 'ws-other') {
-  console.error(`FAIL: post-startup projection was not passed through (got ${JSON.stringify(setCalls[1])})`)
+if (composed.placeholder !== '选择一个工作区或以临时会话开始') {
+  console.error(`FAIL: temporary session placeholder not replaced (got ${composed.placeholder})`)
   process.exit(1)
 }
-// re-apply is idempotent: setter stays the restored original, no re-wrap
-const setBefore = startupCtx.workspaces.list.set
-startupMod.apply(startupCtx, { rootDirectory: '/tmp/root' })
-if (startupCtx.workspaces.list.set !== setBefore) {
-  console.error('FAIL: re-apply re-wrapped list.set')
+// A session registered under a real workspace keeps the host props untouched.
+const registeredComposed = renderComponent(composerEntry.component(composerProps('session-1')))[0]
+if (registeredComposed.disabled !== true || registeredComposed.placeholder !== '选择工作区') {
+  console.error('FAIL: non-temporary composer props were modified')
+  process.exit(1)
+}
+sessionStore = { current: undefined, byId: {}, ids: [] }
+
+// --- Sidebar wrapper renders without throwing (ungrouped pin/badge) ---
+if (renderComponent(sidebarEntry.component({ useSessions: () => undefined, useWorkspaces: () => undefined })).length === 0) {
+  console.error('FAIL: sidebar wrapper rendered nothing')
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg creates a timestamp subfolder + cwd-only session, explicit forwards, failures keep the view, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+const section = registeredSections.find((s) => s.id === 'timestamp-workspace')
+if (!section) {
+  console.error(`FAIL: settings.section "timestamp-workspace" not registered (got ${JSON.stringify(registeredSections)})`)
+  process.exit(1)
+}
+if (!section.hasComponent) {
+  console.error('FAIL: settings.section registered without a render component')
+  process.exit(1)
+}
+
+console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, settings.section registered, re-apply idempotent')
