@@ -348,9 +348,16 @@ function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Pro
   const run = async (operation: () => Promise<string | null>) => {
     if (busy) return
     setBusy(true); setError(null)
-    try { const path = await operation(); path ? owner.onPicked(path) : owner.onCancel() }
-    catch (reason) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); owner.onError(message) }
-    finally { setBusy(false) }
+    try {
+      const path = await operation()
+      if (path) { console.log('[timestamp-workspace] flow picked path:', path); owner.onPicked(path) }
+      else { console.log('[timestamp-workspace] flow cancelled'); owner.onCancel() }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason)
+      console.error('[timestamp-workspace] flow error:', reason)
+      setError(message)
+      owner.onError(message)
+    } finally { setBusy(false) }
   }
   // Re-resolve the root on every open so a settings-panel change takes
   // effect without a reload; fall back to the yaml value on failure.
