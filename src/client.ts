@@ -207,74 +207,60 @@ function WorkspaceState(props: {
     }, '×'))
 }
 
-type WorkspacePickerProps = {
-  open: boolean
-  selectedId?: string
-  onPick: (workspaceId: string) => void
-  onClose: () => void
-  useWorkspaces: <S>(selector: (state: { items: readonly { workspaceId: string; title: string }[]; phase: string }) => S) => S
-  createWorkspace: (input: { path: string }) => Promise<{ workspaceId: string }>
-  useDirectoryFlow: <S>(selector: (occupied: boolean) => S) => S
-  renderSlot: (name: string, owner: DirectoryFlowOwnerProps) => React.ReactNode
-  t: (key: string) => string
+// The host owns the picker root ("conversation.hero.workspace") and already
+// declares its only child hole, the directory flow — the slot engine rejects
+// a second declaration of that child (a full root replacement is therefore
+// impossible by design). Plugins contribute through the child hole only: the
+// host renders the flow outlet next to its menu, so the closed state of the
+// hero occupant can host the workspace state row + clear button, and the open
+// state hosts the directory creation dialog.
+type WorkspaceListStore = {
+  getSnapshot?: () => { items?: readonly { workspaceId: string; title: string; sessionIds?: readonly string[] }[] }
+  subscribe?: (listener: () => void) => () => void
+}
+type SessionListStore = {
+  getSnapshot?: () => { current?: string }
+  subscribe?: (listener: () => void) => () => void
 }
 
-function WorkspacePicker(props: WorkspacePickerProps & { clear: () => void }) {
-  const {
-    open,
-    useWorkspaces,
-    selectedId,
-    onPick,
-    onClose,
-    createWorkspace,
-    useDirectoryFlow,
-    renderSlot,
-    t,
-    clear,
-  } = props
-  const snapshot = useWorkspaces((state) => state)
-  const flowAvailable = useDirectoryFlow((occupied) => occupied)
-  const [flowOpen, setFlowOpen] = React.useState(false)
-  const workspaces = snapshot.items
-  const openFlow = () => {
-    onClose()
-    if (flowAvailable) setFlowOpen(true)
-  }
-  const closeFlow = () => setFlowOpen(false)
-  const flowOwner: DirectoryFlowOwnerProps = {
-    open: flowOpen,
-    busy: false,
-    onPicked: (path) => {
-      createWorkspace({ path })
-        .then((workspace) => { setFlowOpen(false); onPick(workspace.workspaceId) })
-        .catch(() => setFlowOpen(false))
-    },
-    onCancel: closeFlow,
-    onError: closeFlow,
-  }
-  const selectedTitle = workspaces.find((workspace) => workspace.workspaceId === selectedId)?.title
-  return React.createElement(React.Fragment, null,
-    React.createElement(WorkspaceState, { selectedId, selectedTitle, clear }),
-    open && React.createElement('div', {
-      role: 'dialog',
-      'aria-label': '选择工作区',
-      style: { padding: 8, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 6 },
-    },
-      React.createElement('strong', null, '选择工作区'),
-      snapshot.phase === 'pending' && React.createElement('span', { role: 'status' }, '读取工作区中…'),
-      workspaces.map((workspace) => React.createElement('button', {
-        key: workspace.workspaceId,
-        type: 'button',
-        disabled: selectedId === workspace.workspaceId,
-        onClick: () => onPick(workspace.workspaceId),
-      }, workspace.title)),
-      flowAvailable && React.createElement('button', { type: 'button', onClick: openFlow }, t('menu.addWorkspace')),
-      React.createElement('button', { type: 'button', onClick: onClose }, '取消')),
-    React.createElement(React.Fragment, null, renderSlot('conversation.hero.workspace.directoryFlow', flowOwner)),
-  )
+/** Current session's workspace, projected from the workspace list store. */
+function useCurrentWorkspace(workspaces: WorkspaceService | undefined): { selectedId?: string; selectedTitle?: string } {
+  const list = (workspaces as unknown as { list?: WorkspaceListStore })?.list
+  const sessions = (workspaces as unknown as { sessions?: { list?: SessionListStore } })?.sessions?.list
+  const usable = typeof React.useSyncExternalStore === 'function'
+    && !!list?.getSnapshot && typeof list.subscribe === 'function'
+    && !!sessions?.getSnapshot && typeof sessions.subscribe === 'function'
+  // Hooks are called unconditionally; the store identity is stable per apply,
+  // so the usable flag cannot flip between renders.
+  const projection = usable
+    ? React.useSyncExternalStore((listener) => list.subscribe!(listener), () => list.getSnapshot!())
+    : undefined
+  const session = usable
+    ? React.useSyncExternalStore((listener) => sessions.subscribe!(listener), () => sessions.getSnapshot!())
+    : undefined
+  if (!projection || !session) return {}
+  const currentId = session?.current
+  const current = projection?.items?.find((item) => currentId !== undefined && item.sessionIds?.includes(currentId))
+  return { selectedId: current?.workspaceId, selectedTitle: current?.title }
 }
 
-function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
+function FlowDialog(props: {
+  busy: boolean
+  error: string | null
+  onPick: () => void
+  onCreate: () => void
+  onCancel: () => void
+}) {
+  return React.createElement('div', { role: 'dialog', 'aria-label': 'Workspace creation', style: { padding: 16, minWidth: 320 } },
+    React.createElement('strong', null, '选择工作区'),
+    React.createElement('p', null, '可以选择已有目录；也可以自动创建按当前时间命名的新工作区。'),
+    props.error && React.createElement('div', { role: 'alert', style: { color: '#b42318' } }, props.error),
+    React.createElement('button', { disabled: props.busy, onClick: props.onPick }, props.busy ? '处理中…' : '选择已有工作区'),
+    React.createElement('button', { disabled: props.busy, onClick: props.onCreate }, '自动创建时间戳工作区'),
+    React.createElement('button', { disabled: props.busy, onClick: props.onCancel }, '取消'))
+}
+
+function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
   const { owner, pick, create, root } = props
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -296,14 +282,37 @@ function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<strin
       .catch(() => { /* keep the yaml fallback */ })
     return () => { alive = false }
   }, [owner.open])
-  if (!owner.open) return null
-  return React.createElement('div', { role: 'dialog', 'aria-label': 'Workspace creation', style: { padding: 16, minWidth: 320 } },
-    React.createElement('strong', null, '选择工作区'),
-    React.createElement('p', null, '可以选择已有目录；也可以自动创建按当前时间命名的新工作区。'),
-    error && React.createElement('div', { role: 'alert', style: { color: '#b42318' } }, error),
-    React.createElement('button', { disabled: busy, onClick: () => run(pick) }, busy ? '处理中…' : '选择已有工作区'),
-    React.createElement('button', { disabled: busy, onClick: () => run(() => createTimestampWorkspace(create, rootDir)) }, '自动创建时间戳工作区'),
-    React.createElement('button', { disabled: busy, onClick: owner.onCancel }, '取消'))
+  return FlowDialog({
+    busy,
+    error,
+    onPick: () => run(pick),
+    onCreate: () => run(() => createTimestampWorkspace(create, rootDir)),
+    onCancel: owner.onCancel,
+  })
+}
+
+/**
+ * Hero occupant: closed state shows the workspace state row + clear button
+ * (the host renders this outlet next to its picker menu); open state hosts
+ * the directory creation dialog.
+ */
+function HeroFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string; workspaces: WorkspaceService | undefined }) {
+  const { owner, workspaces } = props
+  const selection = useCurrentWorkspace(workspaces)
+  if (owner.open) {
+    return React.createElement(FlowDialogHost, { owner, pick: props.pick, create: props.create, root: props.root })
+  }
+  return React.createElement(WorkspaceState, {
+    selectedId: selection.selectedId,
+    selectedTitle: selection.selectedTitle,
+    clear: () => clearWorkspaceSelection(workspaces ?? {}),
+  })
+}
+
+/** Sidebar occupant: creation dialog only (no state row in the sidebar). */
+function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
+  if (!props.owner.open) return null
+  return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root })
 }
 
 export function apply(ctx: ClientContext, config: Config): void {
@@ -320,49 +329,20 @@ export function apply(ctx: ClientContext, config: Config): void {
     }
   }
   suppressStartupAutoSelection(ctx.workspaces)
-  const occupant = (owner: DirectoryFlowOwnerProps) => React.createElement(Flow, { owner, pick: () => ctx.workspaces.pickDirectory(), create: (root, name) => ctx.workspaces.createDirectory(root, name), root: config.rootDirectory })
+  const pick = () => ctx.workspaces.pickDirectory()
+  const create = (root: string, name: string) => ctx.workspaces.createDirectory(root, name)
+  const heroOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(HeroFlow, { owner, pick, create, root: config.rootDirectory, workspaces })
+  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: config.rootDirectory })
   const injected = () => ({})
   // The host (x6) already holds a priority-0 registration on both single
   // directory-flow holes; register at a lower priority to shadow it
-  // (ascending priority, lowest renders).
+  // (ascending priority, lowest renders). We contribute occupants only — the
+  // child holes are declared by the host's picker entry and must not be
+  // redeclared (the slot engine rejects duplicate child declarations).
   ctx.slots.inject('conversation.hero.workspace.directoryFlow', () => ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
-    yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', inject: injected, priority: -1 }, occupant)
-    yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, occupant)
+    yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', inject: injected, priority: -1 }, heroOccupant)
+    yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, sidebarOccupant)
   }))
-
-  // Keep the host picker contract while adding an explicit workspace state row
-  // and a clear button. The host registration is priority 0, so this complete
-  // root-scope replacement shadows it at -1 while still declaring its child
-  // directory-flow hole.
-  const slots = ctx.slots as unknown as {
-    entries: (name: string) => readonly unknown[]
-    subscribe: (name: string, listener: () => void) => () => void
-    inject: (name: string, factory: () => unknown) => unknown
-    register: (desc: Record<string, unknown>, component: unknown) => unknown
-  }
-  const pickerFlowSource = {
-    getSnapshot: () => slots.entries('conversation.hero.workspace.directoryFlow').length > 0,
-    subscribe: (listener: () => void) => slots.subscribe('conversation.hero.workspace.directoryFlow', listener),
-  }
-  const pickerInjected = () => ({
-    createWorkspace: (input: { path: string }) => ctx.workspaces.create(input),
-    hooks: { directoryFlow: pickerFlowSource },
-  })
-  slots.inject('conversation.hero.workspace', () => slots.register({
-    name: 'conversation.hero.workspace',
-    children: {
-      'conversation.hero.workspace.directoryFlow': { kind: 'single', scope: 'root' },
-    },
-    inject: pickerInjected,
-    locale: 'workspace',
-    priority: -1,
-  }, (props: WorkspacePickerProps) => React.createElement(WorkspacePicker, {
-    ...props,
-    clear: () => {
-      clearWorkspaceSelection(workspaces ?? {})
-      props.onClose()
-    },
-  })))
 
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
