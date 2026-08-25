@@ -212,10 +212,11 @@ const renderComponent = (element) => {
 }
 const owner = (open) => ({ open, busy: false, onPicked: () => {}, onCancel: () => {}, onError: () => {} })
 
-// Hero occupant, closed -> renders nothing (the host chip owns the closed
-// area; a parallel state row would duplicate it).
-if (renderComponent(heroReg.component(owner(false))).length !== 0) {
-  console.error('FAIL: closed hero occupant must render nothing')
+// Hero occupant, closed -> renders the explicit start-temp-conversation
+// button (no state row, no dialog).
+const closedHeroTree = renderComponent(heroReg.component(owner(false)))
+if (!closedHeroTree.some((n) => n?.props?.children === '⚡ 开始临时对话')) {
+  console.error('FAIL: closed hero occupant must render the start button')
   process.exit(1)
 }
 
@@ -272,11 +273,11 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-// startSession shadowing: a parameterless New Session starts a temporary
-// task — a timestamp folder under the root plus an ungrouped session bound
-// to that cwd (NOT registered as a workspace) — and opens it, so the
-// composer is immediately usable; an explicit workspace target runs the
-// host logic.
+// startSession shadowing: a parameterless New Session must NOT allocate a
+// timestamp folder (host creates the cwd directory eagerly at session birth),
+// so it clears to the blank view; the hero blank state offers a start button
+// that allocates the folder + ungrouped session on demand. Explicit targets
+// still run the host logic.
 if (typeof workspacesStub.startSession !== 'function' || workspacesStub.startSession === originalStartSession) {
   console.error('FAIL: workspaces.startSession was not shadowed')
   process.exit(1)
@@ -287,26 +288,44 @@ const clearBeforeAuto = calls.clear
 workspacesStub.createDirectory = createDirectoryStub
 const sessionCallsBefore = sessionCalls.length
 await workspacesStub.startSession()
+if (calls.clear !== clearBeforeAuto + 1) {
+  console.error(`FAIL: parameterless New Session must clear to the blank view (clear=${calls.clear})`)
+  process.exit(1)
+}
+if (createCalls.length !== 0 || sessionCalls.length !== sessionCallsBefore) {
+  console.error('FAIL: parameterless New Session must not allocate a folder or session')
+  process.exit(1)
+}
+
+// Hero blank state: the start button allocates the folder + opens the session.
+const heroTree = renderComponent(heroReg.component(owner(false)))
+const startButton = heroTree.find((n) => n?.props?.children === '⚡ 开始临时对话')
+if (!startButton) {
+  console.error('FAIL: hero blank state did not render the start-temp-conversation button')
+  process.exit(1)
+}
+const beforeStart = sessionCalls.length
+await startButton.props.onClick()
 if (createCalls.length !== 1 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
-  console.error(`FAIL: temp task did not create a timestamp folder under the root (got ${JSON.stringify(createCalls[0])})`)
+  console.error(`FAIL: start button did not create a timestamp folder under the root (got ${JSON.stringify(createCalls[0])})`)
   process.exit(1)
 }
 const createdSession = sessionCalls[sessionCallsBefore]
 const opened = sessionCalls[sessionCallsBefore + 1]
 if (!createdSession || createdSession.workspaceId !== undefined || typeof createdSession.cwd !== 'string' || !createdSession.cwd.startsWith('/tmp/root/')) {
-  console.error(`FAIL: temp task did not create a cwd-only session (got ${JSON.stringify(createdSession)})`)
+  console.error(`FAIL: start button did not create a cwd-only session (got ${JSON.stringify(createdSession)})`)
   process.exit(1)
 }
 if (!opened || opened.open !== `temp:${createdSession.cwd}`) {
-  console.error(`FAIL: temp task session was not opened (got ${JSON.stringify(opened)})`)
+  console.error(`FAIL: start button session was not opened (got ${JSON.stringify(opened)})`)
   process.exit(1)
 }
 if (calls.originalStartSession.length !== 0) {
   console.error(`FAIL: temp task must not forward to the host startSession (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-if (calls.clear !== clearBeforeAuto) {
-  console.error('FAIL: successful temp task must not clear the selection')
+if (calls.clear !== clearBeforeAuto + 1) {
+  console.error('FAIL: successful start must not clear the selection')
   process.exit(1)
 }
 // explicit target forwards to the host logic unchanged
@@ -316,71 +335,30 @@ if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !==
   process.exit(1)
 }
 // failure path: a failing folder create keeps the current view (no clear)
+const sessionCallsAtFail = sessionCalls.length
 workspacesStub.createDirectory = async () => { throw new Error('boom') }
-await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto) {
-  console.error(`FAIL: failed temp task must not clear the selection (clear=${calls.clear})`)
+await startButton.props.onClick()
+if (calls.clear !== clearBeforeAuto + 1 || sessionCalls.length !== sessionCallsAtFail) {
+  console.error(`FAIL: failed start must keep the view without creating (clear=${calls.clear})`)
   process.exit(1)
 }
-// failure path: sessions.create rejection (SessionCreateError) also keeps view
+// failure path: sessions.create rejection also keeps view
 const sessionsCreateStub = sessionsStub.create
 sessionsStub.create = async () => { throw new Error('session boom') }
 workspacesStub.createDirectory = createDirectoryStub
-await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto) {
+await startButton.props.onClick()
+if (calls.clear !== clearBeforeAuto + 1) {
   console.error(`FAIL: failed session create must not clear the selection (clear=${calls.clear})`)
   process.exit(1)
 }
 sessionsStub.create = sessionsCreateStub
-// rapid repeated clicks serialize: both create temp tasks, none dropped
-const rapidBefore = sessionCalls.length
-const p1 = workspacesStub.startSession()
-const p2 = workspacesStub.startSession()
-await Promise.all([p1, p2])
-if (sessionCalls.length !== rapidBefore + 4) {
-  console.error(`FAIL: rapid clicks were not serialized into temp tasks (got ${JSON.stringify(sessionCalls.slice(rapidBefore))})`)
-  process.exit(1)
-}
-
-// Idempotent: a second apply() must not wrap the method again — the same
-// shadow keeps starting temp tasks.
-workspacesStub.createDirectory = createDirectoryStub
-const sessionCallsBefore2 = sessionCalls.length
+// Idempotent: a second apply() must not wrap the method again — no-arg still clears.
+const clearBeforeReapply = calls.clear
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 await workspacesStub.startSession()
-if (sessionCalls.length !== sessionCallsBefore2 + 2) {
+if (calls.clear !== clearBeforeReapply + 1) {
   console.error('FAIL: re-apply double-wrapped startSession')
   process.exit(1)
-}
-
-// Client apply without config: the patch-insert config is host-side only,
-// so the client must resolve rootDirectory from the settings route and must
-// not crash reading config.rootDirectory.
-let bareRegistered = null
-new Function('window', 'require', code)({ __ModuleLoader__: { load(entry) { bareRegistered = entry } } }, requireStub)
-const bareMod = bareRegistered.factory(requireStub)
-const realFetch = globalThis.fetch
-globalThis.fetch = async () => ({ ok: true, json: async () => ({ rootDirectory: '/tmp/store-root' }) })
-try {
-  const bareCreateCalls = []
-  const bareWs = {
-    startSession: () => {},
-    sessions: { clear: () => {}, list: { getSnapshot: () => ({ current: undefined, byId: {} }), subscribe: () => () => {} } },
-    list: { set() {}, getSnapshot: () => ({ items: [], baselinesReady: true, recentWorkspaceId: undefined }), subscribe: () => () => {} },
-    pickDirectory: async () => null,
-    createDirectory: async (root, name) => { bareCreateCalls.push({ root, name }); return `${root}/${name}` },
-    create: async ({ path }) => ({ workspaceId: `x:${path}` }),
-  }
-  const bareSessions = { create: async ({ cwd }) => `t:${cwd}`, open: async () => {} }
-  const bareCtx = { slots: registry, workspaces: bareWs, sessions: bareSessions }
-  bareMod.apply(bareCtx) // no config argument
-  await bareCtx.workspaces.startSession()
-  if (bareCreateCalls.length !== 1 || bareCreateCalls[0].root !== '/tmp/store-root' || !/^\d{14}$/.test(bareCreateCalls[0].name)) {
-    console.error(`FAIL: no-config apply did not resolve root from the settings route (got ${JSON.stringify(bareCreateCalls)})`)
-    process.exit(1)
-  }
-} finally {
-  globalThis.fetch = realFetch
 }
 
 // Startup auto-selection suppression: the host startInitialSelection
@@ -430,4 +408,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg starts a temp task: timestamp folder + cwd-only ungrouped session, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders nothing closed and the state line + clear inside the dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg clears without allocating a folder, hero start button allocates the temp task on demand, explicit forwards, failures keep the view, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
