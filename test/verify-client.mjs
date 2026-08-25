@@ -138,7 +138,7 @@ const sessionCalls = []
 const sessionsStub = {
   create: async (opts) => {
     sessionCalls.push(opts)
-    return { ok: true, value: { sessionId: `temp:${opts.cwd}` } }
+    return `temp:${opts.cwd}` // SessionRuntime: resolves to the id string
   },
   open: async (sessionId) => { sessionCalls.push({ open: sessionId }) },
 }
@@ -328,6 +328,16 @@ if (calls.clear !== clearBeforeAuto + 1) {
   console.error(`FAIL: failed temp task did not fall back to clearing (clear=${calls.clear})`)
   process.exit(1)
 }
+// failure path: sessions.create rejection (SessionCreateError) also falls back
+const sessionsCreateStub = sessionsStub.create
+sessionsStub.create = async () => { throw new Error('session boom') }
+workspacesStub.createDirectory = createDirectoryStub
+await workspacesStub.startSession()
+if (calls.clear !== clearBeforeAuto + 2) {
+  console.error(`FAIL: failed session create did not fall back to clearing (clear=${calls.clear})`)
+  process.exit(1)
+}
+sessionsStub.create = sessionsCreateStub
 // Idempotent: a second apply() must not wrap the method again — the same
 // shadow keeps starting temp tasks.
 workspacesStub.createDirectory = createDirectoryStub
@@ -357,7 +367,7 @@ try {
     createDirectory: async (root, name) => { bareCreateCalls.push({ root, name }); return `${root}/${name}` },
     create: async ({ path }) => ({ workspaceId: `x:${path}` }),
   }
-  const bareSessions = { create: async ({ cwd }) => ({ ok: true, value: { sessionId: `t:${cwd}` } }), open: async () => {} }
+  const bareSessions = { create: async ({ cwd }) => `t:${cwd}`, open: async () => {} }
   const bareCtx = { slots: registry, workspaces: bareWs, sessions: bareSessions }
   bareMod.apply(bareCtx) // no config argument
   await bareCtx.workspaces.startSession()

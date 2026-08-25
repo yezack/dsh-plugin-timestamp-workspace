@@ -89,8 +89,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   })
 }
 
+// ctx.sessions.create resolves to the new session id and THROWS on failure
+// (SessionCreateError) — the SessionRuntime contract, not a result envelope.
 type SessionsService = {
-  create: (opts: { cwd?: string; workspaceId?: string }) => Promise<{ ok: boolean; value?: { sessionId: string }; error?: { message?: string } }>
+  create: (opts: { cwd?: string; workspaceId?: string }) => Promise<string>
   open: (sessionId: string) => void | Promise<void>
 }
 
@@ -113,10 +115,7 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
     console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
     const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
     console.log('[timestamp-workspace] temp task folder ready:', path)
-    const result = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
-    if (!result.ok) throw new Error(result.error?.message ?? 'session create failed')
-    const sessionId = result.value?.sessionId
-    if (!sessionId) throw new Error('session create returned no sessionId')
+    const sessionId = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
     console.log('[timestamp-workspace] temp task session ready:', sessionId)
     await withTimeout(Promise.resolve(sessions.open(sessionId)), 20000, 'sessions.open')
     setTaskStatus({ phase: 'idle' })
