@@ -419,39 +419,35 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
   }
 }
 
-/** Recursively find a text fragment inside a React element subtree. */
-function containsText(node: any, text: string): boolean {
-  if (typeof node === 'string') return node.includes(text)
-  if (node === null || node === undefined || typeof node !== 'object') return false
-  if (Array.isArray(node)) return node.some((child) => containsText(child, text))
-  return containsText(node.props?.children, text)
-}
-
 /**
- * Move the host's ungrouped group to the top of the workspace tree. The
- * browser's role="tree" children are [condition, groupsArray]; the ungrouped
- * groupSection lives inside the groupsArray, so we reorder that nested array
- * in place. Pure element cloning — no DOM surgery, no observers.
+ * Wrap the native WorkspaceBrowser and move the ungrouped group to the top of
+ * its tree after every render. The wrapper mounts the native element inside a
+ * layout-neutral (display:contents) container and, on each committed render,
+ * relocates the groupSection whose text is 未分组/Ungrouped to the first slot.
+ * Pure DOM placement inside our own subtree — no observers, no body surgery.
  */
-function moveUngroupedFirst(node: any): any {
-  if (node === null || node === undefined || typeof node !== 'object') return node
-  if (Array.isArray(node)) return node.map(moveUngroupedFirst)
-  const props = node.props
-  if (props === undefined) return node
-  const children = props.children
-  if (props.role === 'tree' && Array.isArray(children)) {
-    const next = children.map((child: any) => {
-      if (!Array.isArray(child)) return child
-      const idx = child.findIndex((group: any) => containsText(group, '未分组') || containsText(group, 'Ungrouped'))
-      if (idx <= 0) return child
-      return [child[idx], ...child.filter((_: any, i: number) => i !== idx)]
-    })
-    return React.cloneElement(node, props, next)
-  }
-  if (children !== undefined && children !== null) {
-    return React.cloneElement(node, props, Array.isArray(children) ? children.map(moveUngroupedFirst) : moveUngroupedFirst(children))
-  }
-  return node
+function WorkspaceBrowserOrderWrapper(props: any) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const useLayout = React.useLayoutEffect ?? React.useEffect
+  useLayout(() => {
+    const container = containerRef.current
+    if (container === null) return
+    const tree = container.querySelector('[role="tree"]')
+    if (tree === null) return
+    let group: HTMLElement | null = null
+    for (const el of Array.from(tree.children)) {
+      const text = el.textContent ?? ''
+      if (text.includes('未分组') || text.includes('Ungrouped')) {
+        group = el as HTMLElement
+        break
+      }
+    }
+    if (group !== null && tree.firstElementChild !== group) {
+      tree.insertBefore(group, tree.firstElementChild)
+    }
+  })
+  return React.createElement('div', { ref: containerRef, style: { display: 'contents' } },
+    React.createElement(nativeWorkspaceBrowserOriginal, props))
 }
 
 let nativeWorkspaceBrowserEntry: any = null
@@ -462,10 +458,7 @@ function installWorkspaceBrowserOverride(slots: any): void {
   if (!entry || nativeWorkspaceBrowserEntry === entry) return
   nativeWorkspaceBrowserEntry = entry
   nativeWorkspaceBrowserOriginal = entry.component
-  entry.component = (props: any) => {
-    const element = React.createElement(nativeWorkspaceBrowserOriginal, props)
-    try { return moveUngroupedFirst(element) } catch { return element }
-  }
+  entry.component = (props: any) => React.createElement(WorkspaceBrowserOrderWrapper, props)
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
