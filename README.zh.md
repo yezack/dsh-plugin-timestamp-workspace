@@ -27,16 +27,9 @@ DeepSeek Harness 工作区插件：用户可以选择已有目录，也可以不
 
 路径必须是 Host 可访问的已存在目录。`rootDirectory` 只用于自动创建时间戳工作区，不会被当作当前会话已选择的工作区。
 
-## 临时对话（宿主补丁）
+## 临时对话（纯插件）
 
-宿主在基线就绪后只解锁「cwd 属于已注册工作区」的空白会话；无工作区的临时任务会话输入框会被锁住（「选择一个工作区开始」）。要启用真正的临时对话（新开会话 → 在 `rootDirectory` 下建文件夹 → 未分组会话 → 直接输入，无需选择工作区），需对已安装的宿主 bundle 打一次补丁（需管理员权限，App 更新后重跑）：
-
-```powershell
-# 以管理员身份打开 PowerShell 后执行
-node "C:/Users/yezac/Documents/_CODE_/dsh_plugins/dsh插件-默认工作区插件/scripts/patch-host-temp-chat.mjs"
-```
-
-脚本幂等，自动备份原文件（`client.js.bak-temp-chat`）；`--check` 查看状态，`--revert` 还原。
+插件通过公开的 `conversation.composer` takeover chain，仅接管“有 cwd、没有 workspaceId”的临时会话输入框；正式工作区继续使用 dsh 原生输入框，不修改 DSH Desktop 文件。新建会话会在 `rootDirectory/yyyyMMddHHmmss` 创建目录，进入未分组临时会话后即可直接输入。
 
 ## 设置 UI
 

@@ -18,22 +18,9 @@ Add to the profile's `cordis.patch.yml`. The plugin **must** be registered with 
         rootDirectory: C:/Users/<your-name>/Documents/dsh-workspaces
 ```
 
-## Temporary conversations (host patch)
+## Temporary conversations
 
-The host only unlocks the hero composer for blank sessions whose cwd is a
-registered workspace once the workspace baseline is ready — a workspace-less
-temporary task session stays locked ("choose a workspace to start"). To enable
-true temp conversations (new conversation → folder under `rootDirectory` →
-ungrouped session → type immediately, no workspace selection), patch the
-installed host bundle once (requires Administrator; re-apply after app updates):
-
-```powershell
-# PowerShell as Administrator
-node "C:/Users/<you>/Documents/_CODE_/dsh_plugins/dsh插件-默认工作区插件/scripts/patch-host-temp-chat.mjs"
-```
-
-The script is idempotent and backs up the original (`client.js.bak-temp-chat`);
-use `--check` to inspect state and `--revert` to restore.
+A parameterless New Session creates a timestamp folder under `rootDirectory` and opens an ungrouped temporary session. The plugin uses the public `conversation.composer` takeover chain only for cwd-only temporary sessions, so their input is available without selecting a workspace. Registered workspace sessions keep the official InputBar unchanged. No DSH Desktop files are modified.
 
 ## Settings UI
 
