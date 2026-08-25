@@ -133,6 +133,7 @@ const workspacesStub = {
   pickDirectory: async () => '/tmp/root',
   createDirectory: async (root, name) => `${root}/${name}`,
   create: async ({ path }) => ({ workspaceId: `created:${path}` }),
+  archiveSession: async () => {},
 }
 const sessionCalls = []
 const sessionsStub = {
@@ -369,6 +370,7 @@ const startupCtx = {
     pickDirectory: async () => '/tmp/root',
     createDirectory: async (root, name) => `${root}/${name}`,
     create: async ({ path }) => ({ workspaceId: `created:${path}` }),
+  archiveSession: async () => {},
   },
 }
 startupMod.apply(startupCtx, { rootDirectory: '/tmp/root' })

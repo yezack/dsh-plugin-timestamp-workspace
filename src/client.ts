@@ -112,6 +112,11 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
     const root = await resolveRoot(fallbackRoot)
     const trimmed = root.trim()
     if (!trimmed) throw new Error('rootDirectory 未配置')
+    // Auto-clean unused temporary tasks (blank, non-current) before creating a
+    // new one, so repeated New Session clicks never accumulate folders.
+    try {
+      await cleanupUnusedTemporaryTasks(workspaces, sessions, trimmed)
+    } catch { /* cleanup is best-effort */ }
     console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
     const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
     console.log('[timestamp-workspace] temp task folder ready:', path)
@@ -430,15 +435,17 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
  * cwd lives directly under rootDirectory. The host half deletes the folders;
  * the sessions are archived so they leave the ungrouped list.
  */
-async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any): Promise<number> {
+async function cleanupUnusedTemporaryTasks(workspaces: any, sessions: any, rootOverride?: string): Promise<number> {
   const sessionState = sessions?.list?.getSnapshot?.()
   const workspaceState = workspaces?.list?.getSnapshot?.()
   if (!sessionState || !workspaceState) return 0
-  let root = ''
-  try {
-    const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
-    root = settings.rootDirectory.trim()
-  } catch { /* keep '' -> nothing matches */ }
+  let root = rootOverride ?? ''
+  if (root === '') {
+    try {
+      const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
+      root = settings.rootDirectory.trim()
+    } catch { /* keep '' -> nothing matches */ }
+  }
   if (root === '') return 0
   // Normalize both sides (forward slashes, lowercase) so the Windows cwd
   // (backslash) always matches the configured root (forward slash).
