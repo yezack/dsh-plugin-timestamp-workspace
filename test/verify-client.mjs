@@ -259,28 +259,55 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-// startSession shadowing: a parameterless New Session must clear into the
-// workspace-less view (host default would inherit the recent folder), while
-// an explicit workspace target must still run the host logic.
+// startSession shadowing: a parameterless New Session auto-creates a
+// timestamp workspace under the root and starts in it (the host blocks
+// composer input while no session exists, so clearing alone would leave a
+// dead blank view); an explicit workspace target runs the host logic.
 if (typeof workspacesStub.startSession !== 'function' || workspacesStub.startSession === originalStartSession) {
   console.error('FAIL: workspaces.startSession was not shadowed')
   process.exit(1)
 }
-workspacesStub.startSession()
+const createCalls = []
+const createDirectoryStub = async (root, name) => { createCalls.push({ root, name }); return `${root}/${name}` }
+const registerWorkspaceStub = async ({ path }) => { createCalls.push({ path }); return { workspaceId: `created:${path}` } }
+workspacesStub.createDirectory = createDirectoryStub
+workspacesStub.create = registerWorkspaceStub
+const clearBeforeAuto = calls.clear
+await workspacesStub.startSession()
+if (calls.originalStartSession.length !== 1 || typeof calls.originalStartSession[0] !== 'string' || !calls.originalStartSession[0].startsWith('created:/tmp/root/')) {
+  console.error(`FAIL: parameterless startSession did not auto-create and forward (got ${JSON.stringify(calls.originalStartSession)})`)
+  process.exit(1)
+}
+if (createCalls.length !== 2 || createCalls[0].root !== '/tmp/root' || !/^\d{14}$/.test(createCalls[0].name)) {
+  console.error(`FAIL: auto-create did not create a timestamp dir under the root (got ${JSON.stringify(createCalls[0])})`)
+  process.exit(1)
+}
+if (calls.clear !== clearBeforeAuto) {
+  console.error('FAIL: successful auto-create must not clear the selection')
+  process.exit(1)
+}
+// explicit target forwards to the host logic
 workspacesStub.startSession('ws-1')
-if (calls.clear !== 2) {
-  console.error(`FAIL: parameterless startSession did not clear exactly once (clear=${calls.clear})`)
+if (calls.originalStartSession.length !== 2 || calls.originalStartSession[1] !== 'ws-1') {
+  console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !== 'ws-1') {
-  console.error(`FAIL: explicit startSession did not forward to the host logic (got ${JSON.stringify(calls.originalStartSession)})`)
+// failure path: a failing auto-create falls back to the blank view
+workspacesStub.createDirectory = async () => { throw new Error('boom') }
+await workspacesStub.startSession()
+if (calls.clear !== clearBeforeAuto + 1) {
+  console.error(`FAIL: failed auto-create did not fall back to clearing (clear=${calls.clear})`)
   process.exit(1)
 }
-// Idempotent: a second apply() must not wrap the method again.
+// Idempotent: a second apply() must not wrap the method again — the same
+// shadow keeps auto-creating.
+workspacesStub.createDirectory = createDirectoryStub
+workspacesStub.create = registerWorkspaceStub
+const forwardedBefore = calls.originalStartSession.length
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
-workspacesStub.startSession()
-if (calls.clear !== 3) {
-  console.error(`FAIL: re-apply double-wrapped startSession (clear=${calls.clear})`)
+await workspacesStub.startSession()
+if (calls.originalStartSession.length !== forwardedBefore + 1) {
+  console.error('FAIL: re-apply double-wrapped startSession')
   process.exit(1)
 }
 
@@ -331,4 +358,4 @@ if (startupCtx.workspaces.list.set !== setBefore) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders state row + clear + dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg clears, explicit forwards, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')
+console.log('PASS: loader id OK, exports OK, apply() survives the host child-slot declaration (no root replacement), hero occupant renders state row + clear + dialog, sidebar occupant dialog-only, settings.section registered with component, startSession shadowed (no-arg auto-creates a timestamp workspace, explicit forwards, failure falls back, re-apply idempotent), startup auto-selection suppressed (first ready projection masks recentWorkspaceId, then one-shot restores)')

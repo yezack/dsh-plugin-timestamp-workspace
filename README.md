@@ -2,7 +2,7 @@
 
 A DeepSeek Harness workspace-flow plugin. Users can pick an existing directory or create a new workspace named with local time (`yyyyMMddHHmmss`) under a configured root directory.
 
-The plugin keeps new sessions in the explicit default workspace-less state instead of inheriting the previous workspace. The blank-session picker shows the current workspace state, provides a clear button for an explicitly selected workspace, and returns to the default state after clearing. Startup also avoids restoring the previous workspace.
+New conversations start in a fresh timestamp workspace instead of inheriting the previous folder: a parameterless New Session auto-creates `yyyyMMddHHmmss` under the configured root directory and starts there (the host blocks composer input while no session exists, so auto-creating is what keeps the blank flow usable). The blank-session picker shows the current workspace state, provides a clear button for an explicitly selected workspace, and returns to the default state after clearing; startup also avoids restoring the previous workspace. When `rootDirectory` is unset or auto-creation fails, the flow falls back to the blank view (pick or create manually before typing).
 
 The plugin composes the official workspace directory-flow slots and reuses the official workspace service.
 
