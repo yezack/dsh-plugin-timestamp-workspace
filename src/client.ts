@@ -416,9 +416,13 @@ function installNativeComposerOverride(slots: any, sessions: unknown, workspaces
   nativeComposerOriginal = entry.component
   entry.component = (props: any) => {
     const temporary = isTemporarySessionProps(props, sessions, workspaces)
+    const placeholder = props.placeholder === '选择一个工作区开始' || props.placeholder === 'Choose a workspace to start'
+      ? '选择一个工作区或以临时会话开始'
+      : props.placeholder
     return React.createElement(nativeComposerOriginal, {
       ...props,
       disabled: temporary ? false : props.disabled,
+      placeholder,
     })
   }
 }
@@ -545,6 +549,10 @@ function WorkspaceBrowserOrderWrapper(props: any) {
         plus.addEventListener('click', () => {
           try { (runtime as any)?.workspaces?.startSession?.() } catch { /* host may be tearing down */ }
         })
+      }
+      for (const rowEl of Array.from(group.querySelectorAll('[role="treeitem"]'))) {
+        const title = Array.from(rowEl.querySelectorAll('span')).find((s) => (s.textContent ?? '').trim() === '新会话')
+        if (title !== undefined && title !== null) title.textContent = '新的临时会话'
       }
       if (tree.firstElementChild !== group) tree.insertBefore(group, tree.firstElementChild)
     }
