@@ -74,14 +74,15 @@ function suppressStartupAutoSelection(workspaces: unknown): void {
   const list = ws?.list
   const set = list?.set
   const sessionsList = ws?.sessions?.list
-  if (!list || typeof set !== 'function' || !sessionsList || typeof sessionsList.getSnapshot !== 'function') return
+  const getSessionSnapshot = sessionsList?.getSnapshot
+  if (!list || typeof set !== 'function' || !sessionsList || typeof getSessionSnapshot !== 'function') return
   startupMaskInstalled = true
   list.set = (next: Record<string, unknown>): unknown => {
     if (next.baselinesReady === true) {
       // One-shot: the startup reconcile settles on the first ready
       // projection, so restore the original setter right away.
       list.set = set
-      if (sessionsList.getSnapshot().current === undefined && next.recentWorkspaceId !== undefined) {
+      if (getSessionSnapshot()?.current === undefined && next.recentWorkspaceId !== undefined) {
         next = { ...next, recentWorkspaceId: undefined }
       }
     }
@@ -161,6 +162,118 @@ function TimestampSettingsSection(props: { close?: () => void }) {
     props.close && React.createElement('button', { onClick: props.close }, '完成'))
 }
 
+type WorkspaceService = {
+  sessions?: { clear?: () => void }
+  startSession?: (workspaceId?: string) => void
+  pickDirectory: () => Promise<string | null>
+  createDirectory: (root: string, name: string) => Promise<string>
+  create: (input: { path: string }) => Promise<{ workspaceId: string }>
+}
+
+function clearWorkspaceSelection(workspaces: Pick<WorkspaceService, 'sessions'>): void {
+  try { workspaces.sessions?.clear?.() } catch { /* keep the current view */ }
+}
+
+function WorkspaceState(props: {
+  selectedId?: string
+  selectedTitle?: string
+  clear: () => void
+}) {
+  const { selectedId, selectedTitle, clear } = props
+  const selected = selectedId !== undefined
+  return React.createElement('div', {
+    'data-timestamp-workspace-state': selected ? 'selected' : 'default',
+    style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
+  },
+    React.createElement('span', { role: 'status', style: { fontSize: 13, opacity: selected ? 1 : 0.75 } },
+      selected ? `工作区：${selectedTitle || selectedId}` : '默认工作区'),
+    selected && React.createElement('button', {
+      type: 'button',
+      'aria-label': '取消当前工作区',
+      title: '取消当前工作区',
+      onClick: clear,
+      style: {
+        width: 24,
+        height: 24,
+        padding: 0,
+        border: 0,
+        borderRadius: 4,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 16,
+        lineHeight: '24px',
+      },
+    }, '×'))
+}
+
+type WorkspacePickerProps = {
+  open: boolean
+  selectedId?: string
+  onPick: (workspaceId: string) => void
+  onClose: () => void
+  useWorkspaces: <S>(selector: (state: { items: readonly { workspaceId: string; title: string }[]; phase: string }) => S) => S
+  createWorkspace: (input: { path: string }) => Promise<{ workspaceId: string }>
+  useDirectoryFlow: <S>(selector: (occupied: boolean) => S) => S
+  renderSlot: (name: string, owner: DirectoryFlowOwnerProps) => React.ReactNode
+  t: (key: string) => string
+}
+
+function WorkspacePicker(props: WorkspacePickerProps & { clear: () => void }) {
+  const {
+    open,
+    useWorkspaces,
+    selectedId,
+    onPick,
+    onClose,
+    createWorkspace,
+    useDirectoryFlow,
+    renderSlot,
+    t,
+    clear,
+  } = props
+  const snapshot = useWorkspaces((state) => state)
+  const flowAvailable = useDirectoryFlow((occupied) => occupied)
+  const [flowOpen, setFlowOpen] = React.useState(false)
+  const workspaces = snapshot.items
+  const openFlow = () => {
+    onClose()
+    if (flowAvailable) setFlowOpen(true)
+  }
+  const closeFlow = () => setFlowOpen(false)
+  const flowOwner: DirectoryFlowOwnerProps = {
+    open: flowOpen,
+    busy: false,
+    onPicked: (path) => {
+      createWorkspace({ path })
+        .then((workspace) => { setFlowOpen(false); onPick(workspace.workspaceId) })
+        .catch(() => setFlowOpen(false))
+    },
+    onCancel: closeFlow,
+    onError: closeFlow,
+  }
+  const selectedTitle = workspaces.find((workspace) => workspace.workspaceId === selectedId)?.title
+  return React.createElement(React.Fragment, null,
+    React.createElement(WorkspaceState, { selectedId, selectedTitle, clear }),
+    open && React.createElement('div', {
+      role: 'dialog',
+      'aria-label': '选择工作区',
+      style: { padding: 8, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 6 },
+    },
+      React.createElement('strong', null, '选择工作区'),
+      snapshot.phase === 'pending' && React.createElement('span', { role: 'status' }, '读取工作区中…'),
+      workspaces.map((workspace) => React.createElement('button', {
+        key: workspace.workspaceId,
+        type: 'button',
+        disabled: selectedId === workspace.workspaceId,
+        onClick: () => onPick(workspace.workspaceId),
+      }, workspace.title)),
+      flowAvailable && React.createElement('button', { type: 'button', onClick: openFlow }, t('menu.addWorkspace')),
+      React.createElement('button', { type: 'button', onClick: onClose }, '取消')),
+    React.createElement(React.Fragment, null, renderSlot('conversation.hero.workspace.directoryFlow', flowOwner)),
+  )
+}
+
 function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<string | null>; create: (root: string, name: string) => Promise<string>; root: string }) {
   const { owner, pick, create, root } = props
   const [busy, setBusy] = React.useState(false)
@@ -195,15 +308,12 @@ function Flow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<strin
 
 export function apply(ctx: ClientContext, config: Config): void {
   runtime = ctx
-  const workspaces = ctx.workspaces as unknown as {
-    startSession?: (workspaceId?: string) => void
-    sessions?: { clear?: () => void }
-  } | undefined
+  const workspaces = ctx.workspaces as unknown as WorkspaceService | undefined
   if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
     originalStartSession = workspaces.startSession.bind(workspaces)
     workspaces.startSession = (workspaceId?: string): void => {
       if (workspaceId === undefined) {
-        try { workspaces.sessions?.clear?.() } catch { /* keep the current view */ }
+        clearWorkspaceSelection(workspaces)
         return
       }
       originalStartSession!(workspaceId)
@@ -220,13 +330,47 @@ export function apply(ctx: ClientContext, config: Config): void {
     yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, occupant)
   }))
 
+  // Keep the host picker contract while adding an explicit workspace state row
+  // and a clear button. The host registration is priority 0, so this complete
+  // root-scope replacement shadows it at -1 while still declaring its child
+  // directory-flow hole.
+  const slots = ctx.slots as unknown as {
+    entries: (name: string) => readonly unknown[]
+    subscribe: (name: string, listener: () => void) => () => void
+    inject: (name: string, factory: () => unknown) => unknown
+    register: (desc: Record<string, unknown>, component: unknown) => unknown
+  }
+  const pickerFlowSource = {
+    getSnapshot: () => slots.entries('conversation.hero.workspace.directoryFlow').length > 0,
+    subscribe: (listener: () => void) => slots.subscribe('conversation.hero.workspace.directoryFlow', listener),
+  }
+  const pickerInjected = () => ({
+    createWorkspace: (input: { path: string }) => ctx.workspaces.create(input),
+    hooks: { directoryFlow: pickerFlowSource },
+  })
+  slots.inject('conversation.hero.workspace', () => slots.register({
+    name: 'conversation.hero.workspace',
+    children: {
+      'conversation.hero.workspace.directoryFlow': { kind: 'single', scope: 'root' },
+    },
+    inject: pickerInjected,
+    locale: 'workspace',
+    priority: -1,
+  }, (props: WorkspacePickerProps) => React.createElement(WorkspacePicker, {
+    ...props,
+    clear: () => {
+      clearWorkspaceSelection(workspaces ?? {})
+      props.onClose()
+    },
+  })))
+
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
   // the plugin's own fenced route. Guarded so older hosts without the
   // settings section slot keep loading the plugin.
   if (ctx.slots && typeof ctx.slots.inject === 'function') {
     try {
-      ctx.slots.inject('settings.section', () => ctx.slots.register({
+      ;(ctx.slots as unknown as { inject: (name: string, factory: () => unknown) => unknown; register: (desc: Record<string, unknown>, component: unknown) => unknown }).inject('settings.section', () => (ctx.slots as unknown as { register: (desc: Record<string, unknown>, component: unknown) => unknown }).register({
         name: 'settings.section',
         id: 'timestamp-workspace',
         order: 60,

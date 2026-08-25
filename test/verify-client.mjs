@@ -22,8 +22,12 @@ const windowObj = {
 }
 
 const reactStub = {
-  createElement: () => ({}),
-  useState: () => [],
+  Fragment: Symbol('Fragment'),
+  createElement: (type, props, ...children) => ({
+    type,
+    props: { ...(props || {}), children: children.length === 1 ? children[0] : children },
+  }),
+  useState: (initial) => [initial, () => {}],
   useEffect: () => {},
   createContext: () => ({}),
 }
@@ -62,6 +66,7 @@ if (problems.length) {
 
 // apply() with a stubbed ctx: both slot families should be injected.
 const injectedSlots = []
+const registrations = []
 const registeredSections = []
 const calls = { originalStartSession: [], clear: 0 }
 const originalStartSession = (workspaceId) => { calls.originalStartSession.push(workspaceId) }
@@ -72,21 +77,81 @@ const ctxStub = {
       if (typeof fn === 'function') fn()
     },
     register(desc, component) {
+      registrations.push({ desc, component })
       if (desc && desc.name === 'settings.section') registeredSections.push({ id: desc.id, label: desc.label(), hasComponent: typeof component === 'function' })
       return () => {}
     },
+    entries: () => [],
+    subscribe: () => () => {},
   },
   workspaces: {
     startSession: originalStartSession,
     sessions: { clear: () => { calls.clear += 1 } },
     pickDirectory: async () => '/tmp/root',
     createDirectory: async (root, name) => `${root}/${name}`,
+    create: async ({ path }) => ({ workspaceId: `created:${path}` }),
   },
 }
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 
 if (!injectedSlots.includes('conversation.hero.workspace.directoryFlow')) {
   console.error(`FAIL: directoryFlow slot not injected (got ${JSON.stringify(injectedSlots)})`)
+  process.exit(1)
+}
+const pickerRegistration = registrations.find((entry) => entry.desc?.name === 'conversation.hero.workspace')
+if (!pickerRegistration || typeof pickerRegistration.component !== 'function') {
+  console.error('FAIL: complete conversation.hero.workspace slot was not registered with a component')
+  process.exit(1)
+}
+if (pickerRegistration.desc.priority !== -1) {
+  console.error(`FAIL: complete picker slot priority is ${pickerRegistration.desc.priority}, expected -1`)
+  process.exit(1)
+}
+const pickerState = {
+  items: [{ workspaceId: 'ws-1', title: '项目一', sessionIds: [] }],
+  phase: 'ready',
+}
+const pickerProps = {
+  open: false,
+  selectedId: undefined,
+  onPick: () => {},
+  onClose: () => {},
+  useWorkspaces: (selector) => selector(pickerState),
+  useDirectoryFlow: (selector) => selector(true),
+  renderSlot: () => null,
+  createWorkspace: async ({ path }) => ({ workspaceId: `created:${path}` }),
+  t: (key) => key,
+}
+const renderComponent = (element) => {
+  if (element === null || element === false || element === undefined) return []
+  if (Array.isArray(element)) return element.flatMap(renderComponent)
+  if (typeof element !== 'object') return [element]
+  if (typeof element.type === 'function') return renderComponent(element.type(element.props))
+  const children = element.props?.children
+  return [element, ...renderComponent(children)]
+}
+const defaultTree = renderComponent(pickerRegistration.component(pickerProps))
+const defaultState = defaultTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
+if (defaultState?.props?.['data-timestamp-workspace-state'] !== 'default' || !defaultTree.some((node) => node === '默认工作区')) {
+  console.error('FAIL: empty selection did not render the default workspace state')
+  process.exit(1)
+}
+let closed = 0
+const clearPickerProps = {
+  ...pickerProps,
+  selectedId: 'ws-1',
+  onClose: () => { closed += 1 },
+}
+const selectedTree = renderComponent(pickerRegistration.component(clearPickerProps))
+const selectedState = selectedTree.find((node) => node?.props?.['data-timestamp-workspace-state'])
+const clearButton = selectedTree.find((node) => node?.props?.['aria-label'] === '取消当前工作区')
+if (selectedState?.props?.['data-timestamp-workspace-state'] !== 'selected' || !selectedTree.some((node) => node === '工作区：项目一') || !clearButton) {
+  console.error('FAIL: selected workspace state did not render the title and clear button')
+  process.exit(1)
+}
+clearButton.props.onClick()
+if (calls.clear !== 1 || closed !== 1) {
+  console.error(`FAIL: clear button did not clear and close (clear=${calls.clear}, closed=${closed})`)
   process.exit(1)
 }
 const section = registeredSections.find((s) => s.id === 'timestamp-workspace')
@@ -108,7 +173,7 @@ if (typeof ctxStub.workspaces.startSession !== 'function' || ctxStub.workspaces.
 }
 ctxStub.workspaces.startSession()
 ctxStub.workspaces.startSession('ws-1')
-if (calls.clear !== 1) {
+if (calls.clear !== 2) {
   console.error(`FAIL: parameterless startSession did not clear exactly once (clear=${calls.clear})`)
   process.exit(1)
 }
@@ -119,7 +184,7 @@ if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !==
 // Idempotent: a second apply() must not wrap the method again.
 mod.apply(ctxStub, { rootDirectory: '/tmp/root' })
 ctxStub.workspaces.startSession()
-if (calls.clear !== 2) {
+if (calls.clear !== 3) {
   console.error(`FAIL: re-apply double-wrapped startSession (clear=${calls.clear})`)
   process.exit(1)
 }
@@ -142,6 +207,7 @@ const startupCtx = {
     },
     pickDirectory: async () => '/tmp/root',
     createDirectory: async (root, name) => `${root}/${name}`,
+    create: async ({ path }) => ({ workspaceId: `created:${path}` }),
   },
 }
 mod.apply(startupCtx, { rootDirectory: '/tmp/root' })
