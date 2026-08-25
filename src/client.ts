@@ -17,7 +17,19 @@ export function formatTimestamp(date = new Date()): string {
 export async function createTimestampWorkspace(createDirectory: (root: string, name: string) => Promise<string>, rootDirectory: string, date = new Date()): Promise<string> {
   const root = rootDirectory.trim()
   if (!root) throw new Error('rootDirectory 未配置')
-  return createDirectory(root, formatTimestamp(date))
+  // Same-second conflicts (the current temp task may already own this second):
+  // retry the next seconds before giving up.
+  let attempt = date
+  let lastError: unknown
+  for (let i = 0; i < 3; i++) {
+    try {
+      return await createDirectory(root, formatTimestamp(attempt))
+    } catch (reason) {
+      lastError = reason
+      attempt = new Date(attempt.getTime() + 1000)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('目录创建失败（时间戳多次冲突）')
 }
 
 /** The plugin's own fenced settings route (host half serves it). */
@@ -343,7 +355,6 @@ function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Pro
   // Re-resolve the root on every open so a settings-panel change takes
   // effect without a reload; fall back to the yaml value on failure.
   React.useEffect(() => {
-    if (!owner.open) return
     let alive = true
     fetchSettings()
       .then((settings) => { if (alive && settings.rootDirectory) setRootDir(settings.rootDirectory) })
