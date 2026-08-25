@@ -339,6 +339,36 @@ if (sessionCalls.length !== sessionCallsBefore2 + 2) {
   process.exit(1)
 }
 
+// Client apply without config: the patch-insert config is host-side only,
+// so the client must resolve rootDirectory from the settings route and must
+// not crash reading config.rootDirectory.
+let bareRegistered = null
+new Function('window', 'require', code)({ __ModuleLoader__: { load(entry) { bareRegistered = entry } } }, requireStub)
+const bareMod = bareRegistered.factory(requireStub)
+const realFetch = globalThis.fetch
+globalThis.fetch = async () => ({ ok: true, json: async () => ({ rootDirectory: '/tmp/store-root' }) })
+try {
+  const bareCreateCalls = []
+  const bareWs = {
+    startSession: () => {},
+    sessions: { clear: () => {}, list: { getSnapshot: () => ({ current: undefined, byId: {} }), subscribe: () => () => {} } },
+    list: { set() {}, getSnapshot: () => ({ items: [], baselinesReady: true, recentWorkspaceId: undefined }), subscribe: () => () => {} },
+    pickDirectory: async () => null,
+    createDirectory: async (root, name) => { bareCreateCalls.push({ root, name }); return `${root}/${name}` },
+    create: async ({ path }) => ({ workspaceId: `x:${path}` }),
+  }
+  const bareSessions = { create: async ({ cwd }) => ({ ok: true, value: { sessionId: `t:${cwd}` } }), open: async () => {} }
+  const bareCtx = { slots: registry, workspaces: bareWs, sessions: bareSessions }
+  bareMod.apply(bareCtx) // no config argument
+  await bareCtx.workspaces.startSession()
+  if (bareCreateCalls.length !== 1 || bareCreateCalls[0].root !== '/tmp/store-root' || !/^\d{14}$/.test(bareCreateCalls[0].name)) {
+    console.error(`FAIL: no-config apply did not resolve root from the settings route (got ${JSON.stringify(bareCreateCalls)})`)
+    process.exit(1)
+  }
+} finally {
+  globalThis.fetch = realFetch
+}
+
 // Startup auto-selection suppression: the host startInitialSelection
 // reconcile only connects when the first ready projection carries a
 // recentWorkspaceId and no current session is restored. The mask must

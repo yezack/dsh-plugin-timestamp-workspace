@@ -4,7 +4,10 @@ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspa
 
 export const name = 'timestamp-workspace-client'
 export const inject = ['slots', 'workspaces', 'sessions']
-export interface Config { rootDirectory: string }
+// The client half does not receive the patch-insert config (host-side only,
+// like dsh-ssh); rootDirectory is resolved from the settings route, and the
+// apply-time config is only a last-resort fallback.
+export interface Config { rootDirectory?: string }
 
 export function formatTimestamp(date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -59,6 +62,23 @@ let originalStartSession: ((workspaceId?: string) => void) | null = null
 
 let autoCreating = false
 
+type TaskStatus = { phase: 'idle' | 'busy' | 'error'; message?: string }
+let taskStatus: TaskStatus = { phase: 'idle' }
+const taskListeners = new Set<() => void>()
+function setTaskStatus(next: TaskStatus): void {
+  taskStatus = next
+  for (const listener of [...taskListeners]) listener()
+}
+function subscribeTaskStatus(listener: () => void): () => void {
+  taskListeners.add(listener)
+  return () => { taskListeners.delete(listener) }
+}
+function useTaskStatus(): TaskStatus {
+  return typeof React.useSyncExternalStore === 'function'
+    ? React.useSyncExternalStore(subscribeTaskStatus, () => taskStatus)
+    : { phase: 'idle' }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${label}`)), ms)
@@ -74,15 +94,20 @@ type SessionsService = {
   open: (sessionId: string) => void | Promise<void>
 }
 
+async function resolveRoot(fallbackRoot: string): Promise<string> {
+  try {
+    const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
+    if (settings.rootDirectory) return settings.rootDirectory
+  } catch { /* keep the yaml/config fallback */ }
+  return fallbackRoot
+}
+
 async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sessions: SessionsService | undefined, fallbackRoot: string): Promise<void> {
   if (autoCreating || !workspaces || !sessions) return
   autoCreating = true
+  setTaskStatus({ phase: 'busy' })
   try {
-    let root = fallbackRoot
-    try {
-      const settings = await fetchSettings()
-      if (settings.rootDirectory) root = settings.rootDirectory
-    } catch { /* keep the yaml/config fallback */ }
+    const root = await resolveRoot(fallbackRoot)
     const trimmed = root.trim()
     if (!trimmed) throw new Error('rootDirectory 未配置')
     console.log('[timestamp-workspace] new conversation: creating temp task folder under', trimmed)
@@ -94,11 +119,14 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
     if (!sessionId) throw new Error('session create returned no sessionId')
     console.log('[timestamp-workspace] temp task session ready:', sessionId)
     await withTimeout(Promise.resolve(sessions.open(sessionId)), 20000, 'sessions.open')
+    setTaskStatus({ phase: 'idle' })
   } catch (reason) {
     // Temp-task setup failed (no root configured, same-second conflict,
-    // host rejection, timeout...): fall back to the workspace-less view;
-    // the user can pick/create explicitly.
+    // host rejection, timeout...): fall back to the workspace-less view and
+    // surface the reason in the hero state row (visible without DevTools).
+    const message = reason instanceof Error ? reason.message : String(reason)
     console.warn('[timestamp-workspace] temp task start failed, staying blank:', reason)
+    setTaskStatus({ phase: 'error', message })
     clearWorkspaceSelection(workspaces ?? {})
   } finally {
     autoCreating = false
@@ -228,17 +256,19 @@ function clearWorkspaceSelection(workspaces: Pick<WorkspaceService, 'sessions'>)
 function WorkspaceState(props: {
   selectedId?: string
   selectedTitle?: string
+  status?: TaskStatus
   clear: () => void
 }) {
-  const { selectedId, selectedTitle, clear } = props
+  const { selectedId, selectedTitle, status, clear } = props
   const selected = selectedId !== undefined || selectedTitle !== undefined
   return React.createElement('div', {
     'data-timestamp-workspace-state': selected ? 'selected' : 'default',
-    style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
+    style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
   },
-    React.createElement('span', { role: 'status', style: { fontSize: 13, opacity: selected ? 1 : 0.75 } },
-      selected ? `工作区：${selectedTitle || selectedId}` : '默认工作区'),
-    selected && React.createElement('button', {
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+      React.createElement('span', { role: 'status', style: { fontSize: 13, opacity: selected ? 1 : 0.75 } },
+        selected ? `工作区：${selectedTitle || selectedId}` : '默认工作区'),
+      selected && React.createElement('button', {
       type: 'button',
       'aria-label': '取消当前工作区',
       title: '取消当前工作区',
@@ -255,7 +285,9 @@ function WorkspaceState(props: {
         fontSize: 16,
         lineHeight: '24px',
       },
-    }, '×'))
+    }, '×')),
+    status?.phase === 'busy' && React.createElement('span', { role: 'status', style: { fontSize: 12, opacity: 0.7 } }, '正在创建临时任务…'),
+    status?.phase === 'error' && React.createElement('div', { role: 'alert', style: { fontSize: 12, color: '#e5484d' } }, `临时任务创建失败：${status.message}`))
 }
 
 // The host owns the picker root ("conversation.hero.workspace") and already
@@ -370,6 +402,7 @@ function HeroFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promise<s
   return React.createElement(WorkspaceState, {
     selectedId: selection.selectedId,
     selectedTitle: selection.selectedTitle,
+    status: useTaskStatus(),
     clear: () => clearWorkspaceSelection(workspaces ?? {}),
   })
 }
@@ -380,14 +413,15 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
   return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root })
 }
 
-export function apply(ctx: ClientContext, config: Config): void {
+export function apply(ctx: ClientContext, config?: Config): void {
   runtime = ctx
+  const fallbackRoot = config?.rootDirectory ?? ''
   const workspaces = ctx.workspaces as unknown as WorkspaceService | undefined
   const sessions = ctx.sessions as unknown as SessionsService | undefined
   if (workspaces && typeof workspaces.startSession === 'function' && originalStartSession === null) {
     originalStartSession = workspaces.startSession.bind(workspaces)
     workspaces.startSession = (workspaceId?: string): void | Promise<void> => {
-      if (workspaceId === undefined) return autoCreateAndStart(workspaces, sessions, config.rootDirectory)
+      if (workspaceId === undefined) return autoCreateAndStart(workspaces, sessions, fallbackRoot)
       originalStartSession!(workspaceId)
       return undefined
     }
@@ -395,8 +429,8 @@ export function apply(ctx: ClientContext, config: Config): void {
   suppressStartupAutoSelection(ctx.workspaces)
   const pick = () => ctx.workspaces.pickDirectory()
   const create = (root: string, name: string) => ctx.workspaces.createDirectory(root, name)
-  const heroOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(HeroFlow, { owner, pick, create, root: config.rootDirectory, workspaces })
-  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: config.rootDirectory })
+  const heroOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(HeroFlow, { owner, pick, create, root: fallbackRoot, workspaces })
+  const sidebarOccupant = (owner: DirectoryFlowOwnerProps) => React.createElement(SidebarFlow, { owner, pick, create, root: fallbackRoot })
   const injected = () => ({})
   // The host (x6) already holds a priority-0 registration on both single
   // directory-flow holes; register at a lower priority to shadow it
