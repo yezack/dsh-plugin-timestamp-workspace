@@ -387,51 +387,34 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
   return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root, workspaces: props.workspaces })
 }
 
-/** Build a selector for cwd-only temporary task sessions. */
-function makeSelectTemporaryTask(sessions: unknown, workspaces: unknown) {
-  return ({ session }: { session?: any }): unknown | null => {
-    const sessionId = session?.sessionId ?? session?.session?.sessionId
-    if (!sessionId) return null
-    const sessionList = (sessions as any)?.list?.getSnapshot?.()
-    const summary = sessionList?.byId?.[sessionId]
-    const cwd = summary?.cwd ?? session?.cwd ?? session?.session?.cwd
-    if (!cwd) return null
-    const workspaceItems = (workspaces as any)?.list?.getSnapshot?.()?.items ?? []
-    const registered = workspaceItems.some((item: any) => item.sessionIds?.includes(sessionId))
-    return registered ? null : session
+/**
+ * Keep the host InputBar entry, including its children declaration and inject
+ * contract, and wrap only its component at runtime. This preserves the exact
+ * native DOM, styles, attachments, model controls, keyboard handling, draft
+ * machine, and submit behavior without registering a competing slot entry.
+ */
+let nativeComposerEntry: any = null
+let nativeComposerOriginal: any = null
+function installNativeComposerOverride(slots: any, sessions: unknown, workspaces: unknown): void {
+  const entries = slots?.entries?.('conversation.composer.bar') ?? []
+  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeComposerEntry)
+  if (!entry) return
+  if (nativeComposerEntry === entry) return
+  const original = entry.component
+  nativeComposerEntry = entry
+  nativeComposerOriginal = original
+  entry.component = (props: any) => {
+    const sessionId = props.sessionId
+    const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
+    const workspaceState = props.useWorkspaces?.((state: any) => state) ?? (workspaces as any)?.list?.getSnapshot?.()
+    const summary = sessionId === undefined ? undefined : sessionState?.byId?.[sessionId]
+    const registered = sessionId !== undefined && (workspaceState?.items ?? []).some((item: any) => item.sessionIds?.includes(sessionId))
+    const temporary = !!summary?.cwd && !registered
+    return React.createElement(nativeComposerOriginal, {
+      ...props,
+      disabled: temporary ? false : props.disabled,
+    })
   }
-}
-
-function TemporaryTaskComposer(props: any) {
-  const input = props.useInput?.((state: any) => state)
-  const actions = props.inputActions
-  const draft = input?.draft ?? ''
-  const busy = input?.phase === 'adjudicating' || input?.phase === 'submitting'
-  const disabled = actions === undefined || input === undefined || busy
-  const submit = () => {
-    if (!disabled && draft.trim() !== '') actions.submit()
-  }
-  return React.createElement('div', {
-    role: 'region',
-    'aria-label': '临时任务输入',
-    style: { display: 'flex', gap: 8, alignItems: 'flex-end', width: '100%', padding: 12, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12, background: 'var(--dsw-alias-bg-primary)' },
-  },
-    React.createElement('textarea', {
-      value: draft,
-      disabled,
-      rows: 3,
-      placeholder: '开始临时对话…',
-      'aria-label': '临时任务消息',
-      style: { flex: 1, resize: 'vertical', border: 0, outline: 0, background: 'transparent', color: 'inherit' },
-      onChange: (event: any) => actions?.setDraft(event.currentTarget.value),
-      onKeyDown: (event: any) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault()
-          submit()
-        }
-      },
-    }),
-    React.createElement('button', { type: 'button', disabled, onClick: submit }, busy ? '处理中…' : '发送'))
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
@@ -463,18 +446,10 @@ export function apply(ctx: ClientContext, config?: Config): void {
     yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', inject: injected, priority: -1 }, sidebarOccupant)
   }))
 
-  // Public composer takeover chain: only cwd-only temporary tasks are claimed.
-  // Registered workspaces and all other composer interactions fall through to
-  // the host's native InputBar.
-  const composerSlots = ctx.slots as unknown as {
-    inject: (name: string, factory: () => unknown) => unknown
-    register: (desc: Record<string, unknown>, component: unknown) => unknown
-  }
-  composerSlots.inject('conversation.composer', () => composerSlots.register({
-    name: 'conversation.composer',
-    priority: -20,
-    select: makeSelectTemporaryTask(sessions, workspaces),
-  }, TemporaryTaskComposer))
+  // Keep the host's composer.bar registration and wrap its component in place.
+  // No competing composer slot entry is registered; the original DOM/props
+  // contract remains intact and only temporary cwd-only sessions are unlocked.
+  installNativeComposerOverride(ctx.slots, sessions, workspaces)
 
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
