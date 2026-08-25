@@ -546,26 +546,6 @@ function WorkspaceBrowserOrderWrapper(props: any) {
           try { (runtime as any)?.workspaces?.startSession?.() } catch { /* host may be tearing down */ }
         })
       }
-      const actions = row.querySelector('[class*="rowActions"]')
-      if (actions !== null && !actions.querySelector('[data-timestamp-temp-cleanup]')) {
-        const clean = document.createElement('button')
-        clean.type = 'button'
-        clean.setAttribute('data-timestamp-temp-cleanup', '')
-        clean.title = '清理未使用的临时任务'
-        clean.textContent = '清理'
-        clean.style.cssText = 'margin-left:4px;padding:0 6px;height:22px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:11px'
-        clean.addEventListener('click', () => {
-          const ws = (runtime as any)?.workspaces
-          const ss = (runtime as any)?.sessions
-          if (!ws || !ss) return
-          if (!window.confirm('清理所有未使用的临时任务？（将删除对应文件夹并归档空白会话）')) return
-          cleanupUnusedTemporaryTasks(ws, ss).then((count) => {
-            if (count > 0) window.alert(`已清理 ${count} 个未使用的临时任务`)
-            else window.alert('没有可清理的未使用临时任务')
-          }).catch(() => {})
-        })
-        actions.appendChild(clean)
-      }
       if (tree.firstElementChild !== group) tree.insertBefore(group, tree.firstElementChild)
     }
   })
