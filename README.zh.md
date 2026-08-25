@@ -29,4 +29,4 @@ DeepSeek Harness 工作区插件：用户可以选择已有目录，也可以不
 
 ## 设置 UI
 
-dsh 设置面板中有「时间戳工作区」分区：可选择或输入并保存 `rootDirectory`。设置值持久化到 `$DSH_HOME/storages/timestamp-workspace.json`，**优先于** `cordis.patch.yml` 里的配置；目录流对话框每次打开时会重新拉取最新配置，保存后无需重载即可生效。
+dsh 设置面板中有「时间戳工作区」分区：可选择或输入并保存 `rootDirectory`。设置值持久化到 `$DSH_HOME/storages/timestamp-workspace.json`，**优先于** `cordis.patch.yml` 里的配置；目录流对话框每次打开时会重新拉取最新配置，保存后无需重载即可生效。保存时会校验目录存在且为文件夹，不合法路径会被拒绝并提示错误，不会写入配置。

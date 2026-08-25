@@ -8,8 +8,7 @@ declare const Config: z<Schemastery.ObjectS<{
 }>, Schemastery.ObjectT<{
   rootDirectory: z<string, string>;
 }>>;
-/** Host half: filesystem operations are provided by the official Workspace service. */
-declare function apply(ctx: {
+interface HostContext {
   webServer: {
     register(desc: {
       kind: string;
@@ -21,7 +20,10 @@ declare function apply(ctx: {
     info(msg: string): void;
     warn(msg: string): void;
   };
-}, config?: {
+  effect?: (callback: () => (() => void) | void, name?: string) => void;
+}
+/** Host half: filesystem operations are provided by the official Workspace service. */
+declare function apply(ctx: HostContext, config?: {
   rootDirectory?: string;
 }): void;
 //#endregion

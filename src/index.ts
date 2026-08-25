@@ -1,7 +1,7 @@
 import z from '@deepseek-ai/schemastery'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 
 export const name = 'timestamp-workspace'
 export const inject: string[] = ['webServer']
@@ -57,8 +57,16 @@ function readBody(req: { on(event: 'data', cb: (chunk: Buffer) => void): void; o
   })
 }
 
+interface HostContext {
+  webServer: {
+    register(desc: { kind: string; path: string; handler(req: unknown, res: unknown): void }): () => void
+  }
+  logger?: { info(msg: string): void; warn(msg: string): void }
+  effect?: (callback: () => (() => void) | void, name?: string) => void
+}
+
 /** Host half: filesystem operations are provided by the official Workspace service. */
-export function apply(ctx: { webServer: { register(desc: { kind: string; path: string; handler(req: unknown, res: unknown): void }): () => void }; logger?: { info(msg: string): void; warn(msg: string): void } }, config?: { rootDirectory?: string }): void {
+export function apply(ctx: HostContext, config?: { rootDirectory?: string }): void {
   const yamlRoot = typeof config?.rootDirectory === 'string' ? config.rootDirectory.trim() : ''
   const resolveRoot = (): string => {
     // The settings UI persists into the store; the store wins over the
@@ -86,6 +94,15 @@ export function apply(ctx: { webServer: { register(desc: { kind: string; path: s
           return json(res, 400, { ok: false, error: 'rootDirectory 不能为空' })
         }
         const trimmed = root.trim()
+        // The docs contract: rootDirectory must be an existing directory the
+        // host can access. Reject early instead of failing later at create time.
+        try {
+          if (!statSync(trimmed).isDirectory()) {
+            return json(res, 400, { ok: false, error: `不是目录：${trimmed}` })
+          }
+        } catch {
+          return json(res, 400, { ok: false, error: `目录不存在或不可访问：${trimmed}` })
+        }
         writeStore(trimmed)
         ctx.logger?.info?.(`[timestamp-workspace] rootDirectory -> ${trimmed}`)
         return json(res, 200, { ok: true, rootDirectory: trimmed })

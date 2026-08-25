@@ -6,12 +6,15 @@
  * 4. a fresh apply (simulating restart) prefers the store over the yaml value.
  * Uses a throwaway DSH_HOME so the real profile store is never touched.
  */
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const fakeHome = mkdtempSync(join(tmpdir(), 'tsw-verify-'))
 process.env.DSH_HOME = fakeHome
+// A real directory the validation can accept as rootDirectory.
+const realRoot = join(fakeHome, 'workspace-root')
+mkdirSync(realRoot, { recursive: true })
 
 const { apply } = await import('../lib/index.mjs')
 
@@ -67,7 +70,7 @@ try {
   if (r.status !== 200 || r.body.rootDirectory !== yamlRoot) fail(`GET should return yaml root, got ${JSON.stringify(r)}`)
 
   // PUT a new root, then GET again.
-  const newRoot = 'C:/Users/yezac/Documents/dsh-workspaces'
+  const newRoot = realRoot
   r = await request(routes, 'PUT', '/api/timestamp-workspace/settings', { rootDirectory: newRoot })
   if (r.status !== 200 || r.body.ok !== true || r.body.rootDirectory !== newRoot) fail(`PUT failed, got ${JSON.stringify(r)}`)
 
@@ -77,6 +80,17 @@ try {
   // Empty value rejected.
   r = await request(routes, 'PUT', '/api/timestamp-workspace/settings', { rootDirectory: '   ' })
   if (r.status !== 400) fail(`PUT with blank root should be 400, got ${JSON.stringify(r)}`)
+
+  // Nonexistent path rejected (existence validation).
+  const missing = join(fakeHome, 'no-such-dir')
+  r = await request(routes, 'PUT', '/api/timestamp-workspace/settings', { rootDirectory: missing })
+  if (r.status !== 400) fail(`PUT with missing root should be 400, got ${JSON.stringify(r)}`)
+
+  // File path rejected (isDirectory validation).
+  const fileRoot = join(fakeHome, 'a-file.txt')
+  writeFileSync(fileRoot, 'not a directory')
+  r = await request(routes, 'PUT', '/api/timestamp-workspace/settings', { rootDirectory: fileRoot })
+  if (r.status !== 400) fail(`PUT with file root should be 400, got ${JSON.stringify(r)}`)
 
   // Method not allowed.
   r = await request(routes, 'DELETE', '/api/timestamp-workspace/settings')

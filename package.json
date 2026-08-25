@@ -38,7 +38,8 @@
   },
   "scripts": {
     "bundle": "tsdown && node scripts/build-client.mjs",
-    "watch": "tsdown --watch"
+    "watch": "tsdown --watch",
+    "test": "node test/verify-server.mjs && node test/verify-client.mjs && node test/timestamp.test.mjs && node test/timestamp-workspace.test.mjs"
   },
   "files": [
     "lib",
@@ -46,8 +47,9 @@
     "README.zh.md"
   ],
   "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.0",
     "tsdown": "^0.20.0",
-    "typescript": "^5.7.0",
-    "@types/react": "^18.3.0"
+    "typescript": "^5.7.0"
   }
 }

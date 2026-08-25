@@ -6,6 +6,7 @@
     "strict": true,
     "jsx": "react-jsx",
     "declaration": true,
+    "skipLibCheck": true,
     "outDir": "lib"
   },
   "include": [
