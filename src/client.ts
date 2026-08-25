@@ -379,7 +379,12 @@ function FlowDialogHost(props: { owner: DirectoryFlowOwnerProps; pick: () => Pro
     stateLine,
     status: useTaskStatus(),
     onPick: () => run(pick),
-    onCreate: () => run(() => createTimestampWorkspace(create, rootDir)),
+    onCreate: () => run(async () => {
+      // Resolve the root at click time (never trust the async state) so a
+      // fast open-and-create cannot hit an empty rootDirectory.
+      const currentRoot = await resolveRoot(props.root)
+      return createTimestampWorkspace(create, currentRoot)
+    }),
     onCancel: owner.onCancel,
   })
 }
