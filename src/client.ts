@@ -387,11 +387,19 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
   return React.createElement(FlowDialogHost, { owner: props.owner, pick: props.pick, create: props.create, root: props.root, workspaces: props.workspaces })
 }
 
-/** Take over only the composer for cwd-only temporary task sessions. */
-function selectTemporaryTask({ session }: { session?: any }): unknown | null {
-  const cwd = session?.cwd ?? session?.session?.cwd
-  const workspaceId = session?.workspaceId ?? session?.session?.workspaceId
-  return cwd && workspaceId === undefined ? session : null
+/** Build a selector for cwd-only temporary task sessions. */
+function makeSelectTemporaryTask(sessions: unknown, workspaces: unknown) {
+  return ({ session }: { session?: any }): unknown | null => {
+    const sessionId = session?.sessionId ?? session?.session?.sessionId
+    if (!sessionId) return null
+    const sessionList = (sessions as any)?.list?.getSnapshot?.()
+    const summary = sessionList?.byId?.[sessionId]
+    const cwd = summary?.cwd ?? session?.cwd ?? session?.session?.cwd
+    if (!cwd) return null
+    const workspaceItems = (workspaces as any)?.list?.getSnapshot?.()?.items ?? []
+    const registered = workspaceItems.some((item: any) => item.sessionIds?.includes(sessionId))
+    return registered ? null : session
+  }
 }
 
 function TemporaryTaskComposer(props: any) {
@@ -465,7 +473,7 @@ export function apply(ctx: ClientContext, config?: Config): void {
   composerSlots.inject('conversation.composer', () => composerSlots.register({
     name: 'conversation.composer',
     priority: -20,
-    select: selectTemporaryTask,
+    select: makeSelectTemporaryTask(sessions, workspaces),
   }, TemporaryTaskComposer))
 
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
