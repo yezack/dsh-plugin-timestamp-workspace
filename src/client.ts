@@ -395,26 +395,43 @@ function SidebarFlow(props: { owner: DirectoryFlowOwnerProps; pick: () => Promis
  */
 let nativeComposerEntry: any = null
 let nativeComposerOriginal: any = null
+function isTemporarySessionProps(props: any, sessions: unknown, workspaces: unknown): boolean {
+  const sessionId = props.sessionId
+  const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
+  const workspaceState = props.useWorkspaces?.((state: any) => state) ?? (workspaces as any)?.list?.getSnapshot?.()
+  const summary = sessionId === undefined ? undefined : sessionState?.byId?.[sessionId]
+  const registered = sessionId !== undefined && (workspaceState?.items ?? []).some((item: any) => item.sessionIds?.includes(sessionId))
+  return !!summary?.cwd && !registered
+}
+
 function installNativeComposerOverride(slots: any, sessions: unknown, workspaces: unknown): void {
   const entries = slots?.entries?.('conversation.composer.bar') ?? []
   const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeComposerEntry)
-  if (!entry) return
-  if (nativeComposerEntry === entry) return
-  const original = entry.component
+  if (!entry || nativeComposerEntry === entry) return
   nativeComposerEntry = entry
-  nativeComposerOriginal = original
+  nativeComposerOriginal = entry.component
   entry.component = (props: any) => {
-    const sessionId = props.sessionId
-    const sessionState = props.useSessions?.((state: any) => state) ?? (sessions as any)?.list?.getSnapshot?.()
-    const workspaceState = props.useWorkspaces?.((state: any) => state) ?? (workspaces as any)?.list?.getSnapshot?.()
-    const summary = sessionId === undefined ? undefined : sessionState?.byId?.[sessionId]
-    const registered = sessionId !== undefined && (workspaceState?.items ?? []).some((item: any) => item.sessionIds?.includes(sessionId))
-    const temporary = !!summary?.cwd && !registered
+    const temporary = isTemporarySessionProps(props, sessions, workspaces)
     return React.createElement(nativeComposerOriginal, {
       ...props,
       disabled: temporary ? false : props.disabled,
+      placeholder: temporary ? '选择一个工作区或直接开始临时对话' : props.placeholder,
     })
   }
+}
+
+let nativeWorkspaceBrowserEntry: any = null
+let nativeWorkspaceBrowserOriginal: any = null
+function installWorkspaceLabelOverride(slots: any): void {
+  const entries = slots?.entries?.('sidebar.workspaces') ?? []
+  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && candidate !== nativeWorkspaceBrowserEntry)
+  if (!entry || nativeWorkspaceBrowserEntry === entry) return
+  nativeWorkspaceBrowserEntry = entry
+  nativeWorkspaceBrowserOriginal = entry.component
+  entry.component = (props: any) => React.createElement(nativeWorkspaceBrowserOriginal, {
+    ...props,
+    t: (key: string) => key === 'group.ungrouped' ? '临时对话' : props.t(key),
+  })
 }
 
 export function apply(ctx: ClientContext, config?: Config): void {
@@ -450,6 +467,9 @@ export function apply(ctx: ClientContext, config?: Config): void {
   // No competing composer slot entry is registered; the original DOM/props
   // contract remains intact and only temporary cwd-only sessions are unlocked.
   installNativeComposerOverride(ctx.slots, sessions, workspaces)
+  // Keep the complete native WorkspaceBrowser DOM, changing only the label of
+  // the host's top-level ungrouped bucket.
+  installWorkspaceLabelOverride(ctx.slots)
 
   // Settings-panel section (same recipe as deepseek-harness-wallet): a row
   // in the host Settings shell that reads/writes the rootDirectory through
