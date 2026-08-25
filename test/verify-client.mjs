@@ -315,23 +315,33 @@ if (calls.originalStartSession.length !== 1 || calls.originalStartSession[0] !==
   console.error(`FAIL: explicit startSession did not forward (got ${JSON.stringify(calls.originalStartSession)})`)
   process.exit(1)
 }
-// failure path: a failing folder create falls back to the blank view
+// failure path: a failing folder create keeps the current view (no clear)
 workspacesStub.createDirectory = async () => { throw new Error('boom') }
 await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto + 1) {
-  console.error(`FAIL: failed temp task did not fall back to clearing (clear=${calls.clear})`)
+if (calls.clear !== clearBeforeAuto) {
+  console.error(`FAIL: failed temp task must not clear the selection (clear=${calls.clear})`)
   process.exit(1)
 }
-// failure path: sessions.create rejection (SessionCreateError) also falls back
+// failure path: sessions.create rejection (SessionCreateError) also keeps view
 const sessionsCreateStub = sessionsStub.create
 sessionsStub.create = async () => { throw new Error('session boom') }
 workspacesStub.createDirectory = createDirectoryStub
 await workspacesStub.startSession()
-if (calls.clear !== clearBeforeAuto + 2) {
-  console.error(`FAIL: failed session create did not fall back to clearing (clear=${calls.clear})`)
+if (calls.clear !== clearBeforeAuto) {
+  console.error(`FAIL: failed session create must not clear the selection (clear=${calls.clear})`)
   process.exit(1)
 }
 sessionsStub.create = sessionsCreateStub
+// rapid repeated clicks serialize: both create temp tasks, none dropped
+const rapidBefore = sessionCalls.length
+const p1 = workspacesStub.startSession()
+const p2 = workspacesStub.startSession()
+await Promise.all([p1, p2])
+if (sessionCalls.length !== rapidBefore + 4) {
+  console.error(`FAIL: rapid clicks were not serialized into temp tasks (got ${JSON.stringify(sessionCalls.slice(rapidBefore))})`)
+  process.exit(1)
+}
+
 // Idempotent: a second apply() must not wrap the method again — the same
 // shadow keeps starting temp tasks.
 workspacesStub.createDirectory = createDirectoryStub
