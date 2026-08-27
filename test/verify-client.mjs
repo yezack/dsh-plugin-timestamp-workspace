@@ -43,8 +43,13 @@ const reactStub = {
   useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
   createContext: () => ({}),
 }
+const primitivesStub = {
+  Modal: (props) => ({ modal: true, ...props }),
+  Button: (props) => ({ button: true, ...props }),
+}
 const requireStub = (spec) => {
   if (spec === 'react') return reactStub
+  if (spec === '@deepseek-ai/dsh-client-ui-primitives') return primitivesStub
   throw new Error(`unexpected require('${spec}')`)
 }
 
@@ -138,6 +143,10 @@ const sessionsStub = {
     return `temp:${opts.cwd}` // SessionRuntime: resolves to the id string
   },
   open: async (sessionId) => { sessionCalls.push({ open: sessionId }) },
+  list: {
+    getSnapshot: () => sessionStore,
+    subscribe: () => () => {},
+  },
 }
 
 const ctxStub = { slots: registry, workspaces: workspacesStub, sessions: sessionsStub }
@@ -337,4 +346,47 @@ if (!section.hasComponent) {
   process.exit(1)
 }
 
-console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, settings.section registered, re-apply idempotent')
+// --- Batch archive dialog: host Modal + disabled 归档 button until selection ---
+workspaceStore = {
+  items: [{ workspaceId: 'ws-1', title: '项目一', sessionIds: ['session-1', 'session-2'] }],
+  baselinesReady: true,
+  archivedSessionIds: [],
+}
+sessionStore = {
+  current: undefined,
+  byId: {
+    'session-1': { title: '会话 A', blank: false },
+    'session-2': { title: '会话 B', blank: false },
+  },
+  ids: ['session-1', 'session-2'],
+}
+if (typeof mod.BatchArchiveDialog !== 'function') {
+  console.error('FAIL: BatchArchiveDialog not exported')
+  process.exit(1)
+}
+const dialogTree = renderComponent(mod.BatchArchiveDialog({ workspaceId: 'ws-1', label: '项目一', onClose: () => {} }))
+const modalNode = dialogTree.find((node) => node && node.modal === true)
+if (!modalNode) {
+  console.error('FAIL: batch archive dialog did not render the host Modal')
+  process.exit(1)
+}
+if (modalNode.title !== '批量归档 · 项目一') {
+  console.error(`FAIL: batch dialog wrong title (got ${modalNode.title})`)
+  process.exit(1)
+}
+// Body lists both sessions (children sit on the stub Modal object).
+const bodyTree = renderComponent(modalNode.children)
+if (!bodyTree.some((node) => node === '会话 A') || !bodyTree.some((node) => node === '会话 B')) {
+  console.error('FAIL: batch dialog did not list the workspace sessions')
+  process.exit(1)
+}
+// Footer holds 取消 + 归档 (disabled with nothing selected).
+const footerChildren = modalNode.footer?.props?.children
+const archiveButtonEl = Array.isArray(footerChildren) ? footerChildren.find((c) => c?.props?.children === '归档') : undefined
+if (!archiveButtonEl || archiveButtonEl.props.disabled !== true) {
+  console.error('FAIL: batch dialog 归档 button missing or not disabled with no selection')
+  process.exit(1)
+}
+sessionStore = { current: undefined, byId: {}, ids: [] }
+
+console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent')
