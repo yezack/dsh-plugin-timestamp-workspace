@@ -242,6 +242,7 @@ function getPrimitives(): any {
 // menu rows and the batch dialog inherit the exact same iconography.
 const ARCHIVE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" clipRule="evenodd" d="M15.8659 2.05975C17.2603 2.05995 18.3913 3.19096 18.3914 4.58527V5.4874C18.3914 6.02747 18.2192 6.52672 17.9303 6.93735C17.9336 6.96524 17.9388 6.99318 17.9388 7.02195V12.8884C17.9388 13.6345 17.9395 14.2379 17.8996 14.7254C17.8642 15.1593 17.7936 15.5499 17.6373 15.9141L17.5654 16.0685C17.278 16.6328 16.8405 17.1046 16.3038 17.434L16.0679 17.5661C15.66 17.7739 15.2196 17.8598 14.7237 17.9003C14.2362 17.9401 13.6327 17.9405 12.8867 17.9405H7.11122C6.36511 17.9405 5.76171 17.9401 5.27418 17.9003C4.84051 17.8649 4.44949 17.7952 4.08545 17.6391L3.93104 17.5661C3.36673 17.2785 2.89392 16.8414 2.56465 16.3044L2.43245 16.0685C2.22473 15.6608 2.13878 15.2211 2.09825 14.7254C2.05841 14.2379 2.05912 13.6345 2.05912 12.8884V7.02195C2.05912 6.99284 2.06422 6.96449 2.06758 6.93629C1.77931 6.52592 1.60858 6.02687 1.60858 5.4874V4.58527C1.60876 3.19084 2.73962 2.05975 4.1341 2.05975H15.8659ZM16.4984 7.92936C16.296 7.98169 16.0847 8.01288 15.8659 8.01291H4.1341C3.91478 8.01291 3.70246 7.98194 3.49955 7.92936V12.8884C3.49955 13.6582 3.50053 14.1927 3.53445 14.608C3.56769 15.0146 3.62923 15.244 3.71635 15.415L3.7925 15.5514C3.98339 15.8627 4.25749 16.1165 4.58464 16.2833L4.72529 16.3435C4.88095 16.3993 5.08638 16.4402 5.39158 16.4651C5.80685 16.4991 6.34138 16.5001 7.11122 16.5001H12.8867C13.6564 16.5001 14.1911 16.499 14.6063 16.4651C15.0128 16.432 15.2423 16.3703 15.4133 16.2833L15.5508 16.2061C15.8618 16.0152 16.116 15.7419 16.2827 15.415L16.3429 15.2732C16.3985 15.1177 16.4396 14.9128 16.4645 14.608C16.4985 14.1927 16.4984 13.6583 16.4984 12.8884V7.92936ZM4.1341 3.50019C3.53511 3.50019 3.0492 3.98631 3.04902 4.58527V5.4874C3.04902 6.08649 3.535 6.57248 4.1341 6.57248H15.8659C16.4648 6.57228 16.951 6.08638 16.951 5.4874V4.58527C16.9509 3.98644 16.4647 3.50038 15.8659 3.50019H4.1341Z" fill="currentColor"/><path d="M12.7962 12.5661V11.0832H7.20548V12.5661L12.7962 12.5661Z" fill="currentColor"/></svg>'
 const CHECK_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15.0498 3.92579L8.49512 12.3818C8.25774 12.6881 8.04517 12.9645 7.84668 13.1689C7.63957 13.3823 7.38732 13.5841 7.04492 13.6719C6.86373 13.7183 6.6757 13.7346 6.48926 13.7197C6.13666 13.6915 5.8528 13.5355 5.6123 13.3604C5.38201 13.1926 5.12573 12.9567 4.83984 12.6953L1.03125 9.21289L1.96875 8.1875L5.77734 11.6699C6.08684 11.9529 6.27773 12.1249 6.43066 12.2363C6.50183 12.2882 6.54699 12.3135 6.57324 12.3252C6.58525 12.3305 6.59269 12.3322 6.5957 12.333C6.59802 12.3336 6.59961 12.334 6.59961 12.334C6.63317 12.3367 6.66758 12.3335 6.7002 12.3252C6.7002 12.3252 6.70211 12.3251 6.7041 12.3242C6.70698 12.3229 6.71348 12.319 6.72461 12.3115C6.74849 12.2956 6.78843 12.2642 6.84961 12.2012C6.98138 12.0654 7.13957 11.8628 7.39648 11.5313L13.9502 3.07422L15.0498 3.92579Z" fill="currentColor"/></svg>'
+const ELLIPSIS_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.55146 8.00001C4.55146 8.63513 4.03659 9.15001 3.40146 9.15001C2.76634 9.15001 2.25146 8.63513 2.25146 8.00001C2.25146 7.36488 2.76634 6.85001 3.40146 6.85001C4.03659 6.85001 4.55146 7.36488 4.55146 8.00001Z" fill="currentColor"/><path d="M9.1476 8.00001C9.1476 8.63513 8.63273 9.15001 7.9976 9.15001C7.36248 9.15001 6.8476 8.63513 6.8476 8.00001C6.8476 7.36488 7.36248 6.85001 7.9976 6.85001C8.63273 6.85001 9.1476 7.36488 9.1476 8.00001Z" fill="currentColor"/><path d="M13.7486 8.00001C13.7486 8.63513 13.2338 9.15001 12.5986 9.15001C11.9635 9.15001 11.4486 8.63513 11.4486 8.00001C11.4486 7.36488 11.9635 6.85001 12.5986 6.85001C13.2338 6.85001 13.7486 7.36488 13.7486 8.00001Z" fill="currentColor"/></svg>'
 
 async function requestCleanup(paths: string[]): Promise<boolean> {
   try {
@@ -405,52 +406,13 @@ function installWorkspacePickerOverride(slots: any): void {
   entry.component = (props: any) => React.createElement(WorkspacePickerWrapper, props)
 }
 
-const BATCH_ARCHIVE_ATTR = 'data-timestamp-batch-archive'
-const BATCH_ARCHIVE_ITEM_ATTR = 'data-timestamp-batch-archive-item'
-
 /**
- * Append a "批量归档" row into the host's open workspace-actions menu. The row
- * is plain DOM that copies the className of a real host menu item, so it
- * inherits the exact host menu styles (hover fill, icon slot, label slot)
- * without the plugin shipping its own look.
+ * Multi-select archive dialog: first step lists the target sessions
+ * (workspace members, or the ungrouped bucket when workspaceId is undefined),
+ * second step is the explicit confirmation. Modal/Button are the host
+ * primitives; rows use host design tokens only.
  */
-function injectBatchArchiveMenu(menu: HTMLElement, label: string, onPick: () => void): void {
-  const viewport = menu.querySelector('[role="presentation"]')
-  if (viewport === null) return
-  if (viewport.querySelector('[' + BATCH_ARCHIVE_ITEM_ATTR + ']') !== null) return
-  const sample = menu.querySelector('button[role="menuitem"]')
-  if (sample === null) return
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.setAttribute('role', 'menuitem')
-  btn.className = sample.className
-  btn.setAttribute(BATCH_ARCHIVE_ITEM_ATTR, '')
-  const spans = sample.querySelectorAll('span')
-  const iconSpan = document.createElement('span')
-  iconSpan.className = spans[0]?.className ?? ''
-  iconSpan.innerHTML = ARCHIVE_ICON_SVG
-  const labelSpan = document.createElement('span')
-  labelSpan.className = spans[1]?.className ?? ''
-  labelSpan.textContent = '批量归档'
-  btn.appendChild(iconSpan)
-  btn.appendChild(labelSpan)
-  btn.addEventListener('click', (e) => {
-    e.preventDefault()
-    e.stopPropagation()
-    // Close the host menu the same way Escape does (the Menu component
-    // listens on document keydown), then open the batch dialog.
-    try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) } catch { /* older env */ }
-    onPick()
-  })
-  viewport.appendChild(btn)
-}
-
-/**
- * Multi-select archive dialog: first step lists the workspace's sessions
- * (check toggles), second step is the explicit confirmation. Modal/Button are
- * the host primitives; rows use host design tokens only.
- */
-export function BatchArchiveDialog(props: { workspaceId: string; label: string; onClose: () => void }) {
+export function BatchArchiveDialog(props: { workspaceId?: string | undefined; label: string; onClose: () => void }) {
   const { workspaceId, label, onClose } = props
   const prim = getPrimitives()
   const Modal = prim?.Modal
@@ -465,14 +427,32 @@ export function BatchArchiveDialog(props: { workspaceId: string; label: string; 
   const sessionState = sessions?.list?.getSnapshot?.() ?? { byId: {} }
   const workspaceState = workspaces?.list?.getSnapshot?.() ?? { items: [], archivedSessionIds: [] }
   const archived = new Set<string>(workspaceState.archivedSessionIds ?? [])
-  const workspace = (workspaceState.items ?? []).find((w: any) => w.workspaceId === workspaceId)
-  const rows: { id: string; title: string }[] = (workspace?.sessionIds ?? [])
-    .filter((id: string) => !archived.has(id))
-    .map((id: string) => {
-      const summary = sessionState.byId?.[id]
-      const title = summary?.blank === true ? '新会话' : (summary?.displayTitle ?? summary?.title ?? id)
-      return { id, title }
-    })
+  const workspace = workspaceId === undefined
+    ? undefined
+    : (workspaceState.items ?? []).find((w: any) => w.workspaceId === workspaceId)
+  const titleOf = (summary: any, id: string): string =>
+    summary?.blank === true ? '新会话' : (summary?.displayTitle ?? summary?.title ?? id)
+  let rows: { id: string; title: string }[]
+  if (workspace !== undefined) {
+    rows = (workspace.sessionIds ?? [])
+      .filter((id: string) => !archived.has(id))
+      .map((id: string) => ({ id, title: titleOf(sessionState.byId?.[id], id) }))
+  } else {
+    // Ungrouped bucket: the same visible sessions as the sidebar group —
+    // non-subagent, not archived, outside every workspace, and blank only
+    // when it is the current session.
+    const registered = new Set((workspaceState.items ?? []).flatMap((w: any) => w.sessionIds ?? []))
+    rows = (sessionState.ids ?? [])
+      .filter((id: string) => {
+        const summary = sessionState.byId?.[id]
+        if (summary?.origin === 'subagent') return false
+        if (archived.has(id)) return false
+        if (registered.has(id)) return false
+        if (summary?.blank === true && id !== sessionState.current) return false
+        return true
+      })
+      .map((id: string) => ({ id, title: titleOf(sessionState.byId?.[id], id) }))
+  }
   const count = rows.length
   const chosen = [...selected].filter((id) => rows.some((row) => row.id === id)).length
 
@@ -604,9 +584,11 @@ export function BatchArchiveDialog(props: { workspaceId: string; label: string; 
 function WorkspaceBrowserOrderWrapper(props: any) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const useLayout = React.useLayoutEffect ?? React.useEffect
-  const [batchArchive, setBatchArchive] = React.useState<{ workspaceId: string; label: string } | null>(null)
+  const [batchArchive, setBatchArchive] = React.useState<{ workspaceId?: string | undefined; label: string } | null>(null)
+  const [ungroupedMenu, setUngroupedMenu] = React.useState<{ open: boolean } | null>(null)
   // Ungrouped session count per the official sessionVisible rule (tree.ts):
-  // non-subagent, not archived, cwd-only, and blank only when it is current.
+  // non-subagent, not archived, outside every workspace, and blank only when
+  // it is current.
   const sessionState = props.useSessions?.((s: any) => s)
   const workspaceState = props.useWorkspaces?.((s: any) => s)
   let ungroupedCount = 0
@@ -615,7 +597,7 @@ function WorkspaceBrowserOrderWrapper(props: any) {
     const archived = new Set(workspaceState.archivedSessionIds ?? [])
     ungroupedCount = (sessionState.ids ?? []).filter((id: string) => {
       const summary = sessionState.byId?.[id]
-      if (summary?.cwd === undefined || registered.has(id) || archived.has(id)) return false
+      if (summary === undefined || registered.has(id) || archived.has(id)) return false
       if (summary.origin === 'subagent') return false
       if (summary.blank === true && id !== sessionState.current) return false
       return true
@@ -654,55 +636,53 @@ function WorkspaceBrowserOrderWrapper(props: any) {
         const title = Array.from(rowEl.querySelectorAll('span')).find((s) => (s.textContent ?? '').trim() === '新会话')
         if (title !== undefined && title !== null) title.textContent = '新的临时会话'
       }
+      // The ungrouped bucket has no host actions menu, so give it a "..."
+      // button (host iconButton style, placed after the + button) that opens
+      // our menu with 批量归档 for the temporary sessions.
+      const plus = row.querySelector('button[aria-label*="新建会话"]')
+      if (plus !== null) {
+        let ellipsis = row.querySelector('button[data-timestamp-ungrouped-ellipsis]') as HTMLButtonElement | null
+        if (ellipsis === null) {
+          ellipsis = document.createElement('button')
+          ellipsis.type = 'button'
+          ellipsis.className = plus.className
+          ellipsis.setAttribute('aria-label', '批量归档')
+          ellipsis.setAttribute('data-timestamp-ungrouped-ellipsis', '')
+          ellipsis.innerHTML = ELLIPSIS_ICON_SVG
+          const actionsCell = plus.parentElement
+          if (actionsCell !== null) {
+            actionsCell.appendChild(ellipsis)
+            ellipsis.addEventListener('click', (e) => {
+              e.stopPropagation()
+              setUngroupedMenu({ open: true })
+            })
+          }
+        }
+      }
       if (tree.firstElementChild !== group) tree.insertBefore(group, tree.firstElementChild)
     }
-    // Batch archive: bind the workspace rows' actions (...) menu. Workspace
-    // rows carry BOTH the actions button and the new-session (+) button;
-    // session rows only have the actions menu, and the ungrouped bucket has
-    // no actions button at all. The host renders groups in workspace order
-    // (ungrouped is pinned first by us but excluded here), so index-align to
-    // the projection, falling back to a unique title match.
-    const items = (workspaceState?.items ?? []) as { workspaceId: string; title: string }[]
-    const workspaceRows: HTMLElement[] = []
-    for (const candidate of Array.from(tree.querySelectorAll('[role="treeitem"]'))) {
-      const el = candidate as HTMLElement
-      if (el.querySelector('button[aria-label*="的操作"]') === null) continue
-      if (el.querySelector('button[aria-label*="新建会话"]') === null) continue
-      workspaceRows.push(el)
-    }
-    workspaceRows.forEach((row, index) => {
-      const ellipsis = row.querySelector('button[aria-label*="的操作"]') as HTMLButtonElement | null
-      if (ellipsis === null || ellipsis.hasAttribute(BATCH_ARCHIVE_ATTR)) return
-      const titleSpan = Array.from(row.querySelectorAll('span')).filter((s) => (s.textContent ?? '').trim() !== '').pop()
-      const rowLabel = titleSpan?.textContent?.trim() ?? ''
-      const titleMatches = items.filter((w) => w.title === rowLabel)
-      let workspaceId: string | undefined = titleMatches.length === 1 ? titleMatches[0].workspaceId : undefined
-      if (workspaceId === undefined) workspaceId = items[index]?.workspaceId
-      if (workspaceId === undefined || rowLabel === '') return
-      ellipsis.setAttribute(BATCH_ARCHIVE_ATTR, '')
-      ellipsis.addEventListener('click', () => {
-        // The host menu opens via React on the same click; inject once the
-        // portaled list has committed.
-        setTimeout(() => {
-          const menus = Array.from(document.querySelectorAll('[role="menu"]'))
-          const buttonRect = ellipsis.getBoundingClientRect()
-          let best: HTMLElement | null = null
-          let bestDist = Infinity
-          for (const menu of menus) {
-            const r = (menu as HTMLElement).getBoundingClientRect()
-            const d = Math.hypot(r.left - buttonRect.left, r.top - buttonRect.top)
-            if (d < bestDist) { bestDist = d; best = menu as HTMLElement }
-          }
-          if (best === null) return
-          injectBatchArchiveMenu(best, rowLabel, () => {
-            setBatchArchive({ workspaceId: workspaceId!, label: rowLabel })
-          })
-        }, 0)
-      })
-    })
   })
+  const MenuComp = getPrimitives()?.Menu
   return React.createElement('div', { ref: containerRef, style: { display: 'contents' } },
     React.createElement(nativeWorkspaceBrowserOriginal, props),
+    ungroupedMenu !== null && MenuComp !== undefined
+      ? React.createElement(MenuComp, {
+          open: true,
+          anchor: null,
+          items: [{ id: 'batch-archive', label: '批量归档', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: ARCHIVE_ICON_SVG } }) }],
+          onSelect: (id: string) => {
+            setUngroupedMenu(null)
+            if (id === 'batch-archive') setBatchArchive({ workspaceId: undefined, label: '未分组' })
+          },
+          onClose: () => setUngroupedMenu(null),
+          portal: true,
+          closeOnPointerLeave: true,
+          getAnchorRect: () => {
+            const btn = containerRef.current?.querySelector('button[data-timestamp-ungrouped-ellipsis]')
+            return btn !== null && btn !== undefined ? btn.getBoundingClientRect() : null
+          },
+        })
+      : null,
     batchArchive === null ? null : React.createElement(BatchArchiveDialog, {
       workspaceId: batchArchive.workspaceId,
       label: batchArchive.label,

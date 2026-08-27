@@ -387,6 +387,28 @@ if (!archiveButtonEl || archiveButtonEl.props.disabled !== true) {
   console.error('FAIL: batch dialog 归档 button missing or not disabled with no selection')
   process.exit(1)
 }
+
+// Ungrouped mode (workspaceId undefined): lists the ungrouped bucket's
+// visible sessions — registered workspace sessions are excluded.
+sessionStore = {
+  current: undefined,
+  byId: {
+    'session-1': { title: '会话 A', blank: false },
+    'temp-9': { cwd: '/tmp/root/20260825120000', title: '临时任务 9', blank: false },
+  },
+  ids: ['session-1', 'temp-9'],
+}
+const ungroupedTree = renderComponent(mod.BatchArchiveDialog({ workspaceId: undefined, label: '未分组', onClose: () => {} }))
+const ungroupedModal = ungroupedTree.find((node) => node && node.modal === true)
+if (!ungroupedModal || ungroupedModal.title !== '批量归档 · 未分组') {
+  console.error('FAIL: ungrouped batch dialog wrong title')
+  process.exit(1)
+}
+const ungroupedBody = renderComponent(ungroupedModal.children)
+if (!ungroupedBody.some((node) => node === '临时任务 9') || ungroupedBody.some((node) => node === '会话 A')) {
+  console.error('FAIL: ungrouped batch dialog did not filter to the ungrouped sessions')
+  process.exit(1)
+}
 sessionStore = { current: undefined, byId: {}, ids: [] }
 
-console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent')
+console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal (workspace and ungrouped modes) with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent')

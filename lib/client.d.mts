@@ -10,12 +10,13 @@ interface Config {
 declare function formatTimestamp(date?: Date): string;
 declare function createTimestampWorkspace(createDirectory: (root: string, name: string) => Promise<string>, rootDirectory: string, date?: Date): Promise<string>;
 /**
- * Multi-select archive dialog: first step lists the workspace's sessions
- * (check toggles), second step is the explicit confirmation. Modal/Button are
- * the host primitives; rows use host design tokens only.
+ * Multi-select archive dialog: first step lists the target sessions
+ * (workspace members, or the ungrouped bucket when workspaceId is undefined),
+ * second step is the explicit confirmation. Modal/Button are the host
+ * primitives; rows use host design tokens only.
  */
 declare function BatchArchiveDialog(props: {
-  workspaceId: string;
+  workspaceId?: string | undefined;
   label: string;
   onClose: () => void;
 }): React.DetailedReactHTMLElement<{
