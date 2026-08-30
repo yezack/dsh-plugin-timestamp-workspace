@@ -102,51 +102,49 @@ type WorkspaceService = {
   archiveSession?: (sessionId: string) => void | Promise<void>
 }
 
-// Resolved once per apply: newer hosts split directory capabilities onto
-// ctx.uiWorkspace (UiWorkspaceService) while ctx.workspaces keeps only the
-// pure Workspace controller (list / archiveSession / rename / delete...).
-// Older hosts expose everything on ctx.workspaces. The facade prefers the
-// legacy face and falls back to the uiWorkspace face, so the plugin works on
-// both generations.
 let workspacesService: WorkspaceService | undefined
 /**
- * Resolve the live workspace face at CALL time (not apply time): the host may
- * register ctx.uiWorkspace after this plugin applies, exactly like the hero
- * slot. Newer hosts split directory capabilities onto ctx.uiWorkspace while
- * ctx.workspaces keeps only the pure controller; older hosts expose everything
- * on ctx.workspaces.
+ * The client-modules runner only lets a plugin read services it declared in
+ * `inject`, and declaring a service that does not exist on older hosts would
+ * stall activation — so ctx.uiWorkspace is off-limits. Everything the plugin
+ * needs resolves at CALL time off ctx.workspaces (declared), read through
+ * getters so a later host registration still lands:
+ *   - list / archiveSession: present on both host generations;
+ *   - createDirectory / pickDirectory: legacy hosts only — folders are now
+ *     created through the plugin's own host route (createDirectoryViaHost),
+ *     and the settings picker falls back to manual input when absent.
  */
 function resolveWorkspacesFacade(_ctx: any): WorkspaceService | undefined {
-  const live = (): { ws: any; ui: any } => {
-    const c = runtime as any
-    return { ws: c?.workspaces, ui: c?.uiWorkspace }
-  }
-  const createDirectory = (root: string, name: string): Promise<string> => {
-    const { ws, ui } = live()
-    if (typeof ws?.createDirectory === 'function') return ws.createDirectory(root, name)
-    if (typeof ui?.createDirectory === 'function') return ui.createDirectory(root, name)
-    throw new Error('workspaces.createDirectory 不可用（宿主版本不兼容）')
-  }
-  const pickDirectory = (): Promise<string | null> => {
-    const { ws, ui } = live()
-    if (typeof ws?.pickDirectory === 'function') return ws.pickDirectory()
-    if (typeof ui?.pickDirectory === 'function') return ui.pickDirectory()
-    throw new Error('workspaces.pickDirectory 不可用（宿主版本不兼容）')
-  }
-  const archiveSession = (sessionId: string): void | Promise<void> => {
-    const { ws, ui } = live()
-    if (typeof ws?.archiveSession === 'function') return ws.archiveSession(sessionId)
-    if (typeof ui?.archiveSession === 'function') return ui.archiveSession(sessionId)
-    throw new Error('workspaces.archiveSession 不可用（宿主版本不兼容）')
-  }
-  const facade: Record<string, unknown> = { createDirectory, pickDirectory, archiveSession }
-  Object.defineProperty(facade, 'list', {
-    get: () => {
-      const { ws, ui } = live()
-      return ws?.list ?? ui?.workspaces?.list ?? ui?.list
-    },
-  })
+  const ws = (): any => (runtime as any)?.workspaces
+  const facade: Record<string, unknown> = {}
+  Object.defineProperty(facade, 'list', { get: () => ws()?.list })
+  Object.defineProperty(facade, 'createDirectory', { get: () => (typeof ws()?.createDirectory === 'function' ? ws().createDirectory.bind(ws()) : undefined) })
+  Object.defineProperty(facade, 'pickDirectory', { get: () => (typeof ws()?.pickDirectory === 'function' ? ws().pickDirectory.bind(ws()) : undefined) })
+  Object.defineProperty(facade, 'archiveSession', { get: () => (typeof ws()?.archiveSession === 'function' ? ws().archiveSession.bind(ws()) : undefined) })
   return facade as unknown as WorkspaceService
+}
+
+/**
+ * Create the timestamp folder through the plugin's own host route (mkdir in
+ * the host process — independent of the host client service split). Falls back
+ * to the legacy ctx.workspaces.createDirectory (older hosts / test stubs)
+ * when the route is unreachable.
+ */
+async function createDirectoryViaHost(root: string, name: string): Promise<string> {
+  try {
+    const res = await fetch('/api/timestamp-workspace/create-directory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ root, name }),
+    })
+    const data = await res.json().catch(() => null)
+    if (res.ok && data?.ok === true && typeof data.path === 'string') return data.path
+    throw new Error(data && typeof data.error === 'string' ? data.error : `create-directory failed: ${res.status}`)
+  } catch (reason) {
+    const create = workspacesService?.createDirectory
+    if (typeof create === 'function') return create(root, name)
+    throw reason
+  }
 }
 
 async function resolveRoot(): Promise<string> {
@@ -170,7 +168,7 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
       await cleanupUnusedTemporaryTasks(workspaces, sessions, trimmed)
     } catch { /* cleanup is best-effort */ }
     console.log('[timestamp-workspace] creating temp task folder under', trimmed)
-    const path = await withTimeout(workspaces.createDirectory(trimmed, formatTimestamp()), 20000, 'createDirectory')
+    const path = await withTimeout(createTimestampWorkspace(createDirectoryViaHost, trimmed), 20000, 'createDirectory')
     console.log('[timestamp-workspace] temp task folder ready:', path)
     const sessionId = await withTimeout(sessions.create({ cwd: path }), 20000, 'sessions.create')
     console.log('[timestamp-workspace] temp task session ready:', sessionId)
@@ -260,7 +258,11 @@ function TimestampSettingsSection(props: { close?: () => void }) {
               style: { padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(128,128,128,0.35)', background: 'transparent', color: 'inherit', fontSize: 13 },
             })),
           React.createElement('div', { style: { display: 'flex', gap: 8 } },
-            React.createElement('button', { disabled: busy, onClick: pick }, busy ? '处理中…' : '选择目录…'),
+            React.createElement('button', {
+              disabled: busy || typeof workspacesService?.pickDirectory !== 'function',
+              title: typeof workspacesService?.pickDirectory === 'function' ? undefined : '当前宿主不支持目录选择器，请手动输入路径',
+              onClick: pick,
+            }, busy ? '处理中…' : '选择目录…'),
             React.createElement('button', { disabled: busy, onClick: save }, '保存')),
           error && React.createElement('div', { role: 'alert', style: { fontSize: 13, color: '#e5484d' } }, error),
           saved && React.createElement('div', { style: { fontSize: 13, color: '#30a46c' } }, '已保存')),

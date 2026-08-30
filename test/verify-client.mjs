@@ -412,8 +412,9 @@ if (!ungroupedBody.some((node) => node === '临时任务 9') || ungroupedBody.so
 sessionStore = { current: undefined, byId: {}, ids: [] }
 
 // --- Newer host shape: ctx.workspaces is a pure controller (no directory
-// capabilities) and ctx.uiWorkspace owns createDirectory/pickDirectory. The
-// facade must route the hero temp-task flow to uiWorkspace. ---
+// capabilities) and there is no ctx.uiWorkspace dependency (the runner would
+// reject reading an undeclared service). The plugin must create folders
+// through its own host route via fetch, and apply() must not throw. ---
 let freshRegistered = null
 new Function('window', 'require', code)({ __ModuleLoader__: { load(entry) { freshRegistered = entry } } }, requireStub)
 const freshMod = freshRegistered.factory(requireStub)
@@ -434,16 +435,36 @@ const freshWorkspaces = {
   list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }), subscribe: () => () => {} },
   archiveSession: async (id) => { uiCalls.push({ controllerArchive: id }) },
 }
-const freshUiWorkspace = {
-  createDirectory: async (root, name) => { uiCalls.push({ create: { root, name } }); return `${root}/${name}` },
-  pickDirectory: async () => '/tmp/ui-root',
-  archiveSession: async (id) => { uiCalls.push({ uiArchive: id }) },
-}
 const freshSessions = {
   create: async (opts) => { uiCalls.push({ create: opts }); return `temp:${opts.cwd}` },
   open: async (id) => { uiCalls.push({ open: id }) },
 }
-freshMod.apply({ slots: freshRegistry, workspaces: freshWorkspaces, uiWorkspace: freshUiWorkspace, sessions: freshSessions }, { rootDirectory: '/tmp/root' })
+// Mock fetch so the plugin's own create-directory route answers (settings
+// route fails -> resolveRoot falls back to the config rootDirectory).
+const realFetch = globalThis.fetch
+const fetchCalls = []
+globalThis.fetch = async (url, opts) => {
+  const u = String(url)
+  fetchCalls.push(u)
+  if (u.includes('/api/timestamp-workspace/create-directory')) {
+    const body = JSON.parse(opts?.body ?? '{}')
+    return { ok: true, json: async () => ({ ok: true, path: `${body.root}/${body.name}` }) }
+  }
+  if (u.includes('/api/timestamp-workspace/settings')) {
+    return { ok: false, json: async () => ({ error: 'unavailable' }) }
+  }
+  return realFetch(url, opts)
+}
+let freshApplyError = null
+try {
+  freshMod.apply({ slots: freshRegistry, workspaces: freshWorkspaces, sessions: freshSessions }, { rootDirectory: '/tmp/root' })
+} catch (error) {
+  freshApplyError = error
+}
+if (freshApplyError !== null) {
+  console.error(`FAIL: fresh-host apply() threw (undeclared service read?): ${freshApplyError.message}`)
+  process.exit(1)
+}
 const freshHeroEntry = freshRegistry.entries('conversation.hero.workspace')[0]
 const freshTree = renderComponent(freshHeroEntry.component({ open: false }))
 const freshButton = freshTree.find((node) => node?.type === 'button' && node?.props?.className === 'dsh-timestamp-hero-temp-button')
@@ -453,14 +474,18 @@ if (!freshButton) {
 }
 freshButton.props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 25))
-const created = uiCalls.find((call) => call.create && typeof call.create.root === 'string' && call.create.root === '/tmp/root')
-if (!created) {
-  console.error(`FAIL: temp task did not route createDirectory to uiWorkspace (got ${JSON.stringify(uiCalls)})`)
+if (!fetchCalls.some((u) => u.includes('/api/timestamp-workspace/create-directory'))) {
+  console.error('FAIL: temp task did not call the plugin create-directory route')
   process.exit(1)
 }
 if (!uiCalls.some((call) => call.open && call.open.startsWith('temp:/tmp/root/'))) {
-  console.error('FAIL: fresh-host temp task session was not opened')
+  console.error(`FAIL: fresh-host temp task session was not opened (got ${JSON.stringify(uiCalls)})`)
   process.exit(1)
 }
+if (!uiCalls.some((call) => call.create && call.create.cwd && call.create.cwd.startsWith('/tmp/root/'))) {
+  console.error('FAIL: fresh-host temp task did not create a cwd-only session from the route path')
+  process.exit(1)
+}
+globalThis.fetch = realFetch
 
-console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal (workspace and ungrouped modes) with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent, fresh-host uiWorkspace facade routes createDirectory correctly')
+console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal (workspace and ungrouped modes) with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent, pure-controller host shape applies without uiWorkspace and creates folders via the plugin route')

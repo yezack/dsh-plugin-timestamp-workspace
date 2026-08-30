@@ -140,7 +140,43 @@ if (r.status !== 400) {
   process.exit(1)
 }
 
-console.log('PASS: route registered, GET/PUT round-trip OK, validation OK, store persists, store wins over yaml on restart')
+// --- create-directory route ---
+const createName = '20260826000000'
+r = await request(routes, 'POST', '/api/timestamp-workspace/create-directory', { root: realRoot, name: createName })
+if (r.status !== 200 || r.body.ok !== true || r.body.path !== join(realRoot, createName)) {
+  console.error(`FAIL: create-directory did not create the folder (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+if (!existsSync(join(realRoot, createName))) {
+  console.error('FAIL: create-directory folder missing on disk')
+  process.exit(1)
+}
+// duplicate name -> 409
+r = await request(routes, 'POST', '/api/timestamp-workspace/create-directory', { root: realRoot, name: createName })
+if (r.status !== 409) {
+  console.error(`FAIL: create-directory must reject duplicates (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+// separator / traversal name rejected
+r = await request(routes, 'POST', '/api/timestamp-workspace/create-directory', { root: realRoot, name: '../escape' })
+if (r.status !== 400) {
+  console.error(`FAIL: create-directory must reject traversal names (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+// missing parent rejected
+r = await request(routes, 'POST', '/api/timestamp-workspace/create-directory', { root: join(fakeHome, 'no-such-dir'), name: 'x' })
+if (r.status !== 400) {
+  console.error(`FAIL: create-directory must reject a missing parent (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+// non-POST rejected
+r = await request(routes, 'GET', '/api/timestamp-workspace/create-directory')
+if (r.status !== 405) {
+  console.error(`FAIL: create-directory GET should be 405 (got ${JSON.stringify(r)})`)
+  process.exit(1)
+}
+
+console.log('PASS: route registered, GET/PUT round-trip OK, validation OK, store persists, store wins over yaml on restart, create-directory mkdir + validation OK')
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error))
 } finally {

@@ -108,6 +108,55 @@ export function apply(ctx: HostContext, config?: { rootDirectory?: string }): vo
         return json(res, 200, { ok: true, rootDirectory: trimmed })
       },
     })
+    const disposeCreate = ctx.webServer.register({
+      kind: 'exact',
+      path: '/api/timestamp-workspace/create-directory',
+      handler: async (req: any, res: any) => {
+        if (req.method !== 'POST') {
+          return json(res, 405, { ok: false, error: 'method-not-allowed' })
+        }
+        const body = await readBody(req)
+        let payload: unknown
+        try { payload = JSON.parse(body ?? '{}') } catch { return json(res, 400, { ok: false, error: 'bad-json' }) }
+        const root = (payload as { root?: unknown })?.root
+        const name = (payload as { name?: unknown })?.name
+        if (typeof root !== 'string' || !root.trim()) {
+          return json(res, 400, { ok: false, error: 'root 不能为空' })
+        }
+        if (typeof name !== 'string' || !name.trim()) {
+          return json(res, 400, { ok: false, error: 'name 不能为空' })
+        }
+        const trimmedName = name.trim()
+        // A single path segment only — never allow separators or traversal.
+        if (/[\\/]/.test(trimmedName) || trimmedName === '.' || trimmedName === '..') {
+          return json(res, 400, { ok: false, error: 'name 必须是单个目录名' })
+        }
+        const parent = resolve(root.trim())
+        try {
+          if (!statSync(parent).isDirectory()) {
+            return json(res, 400, { ok: false, error: `不是目录：${parent}` })
+          }
+        } catch {
+          return json(res, 400, { ok: false, error: `目录不存在或不可访问：${parent}` })
+        }
+        const target = join(parent, trimmedName)
+        // Safety: the target must stay a direct child of the given root.
+        if (!target.startsWith(parent + sep)) {
+          return json(res, 400, { ok: false, error: 'refusing to create outside the given root' })
+        }
+        try {
+          mkdirSync(target, { recursive: false })
+        } catch (reason) {
+          const code = (reason as NodeJS.ErrnoException)?.code
+          if (code === 'EEXIST') {
+            return json(res, 409, { ok: false, error: `目录已存在：${trimmedName}` })
+          }
+          return json(res, 500, { ok: false, error: reason instanceof Error ? reason.message : String(reason) })
+        }
+        ctx.logger?.info?.(`[timestamp-workspace] created ${target}`)
+        return json(res, 200, { ok: true, path: target })
+      },
+    })
     const disposeCleanup = ctx.webServer.register({
       kind: 'exact',
       path: '/api/timestamp-workspace/cleanup',
@@ -141,6 +190,6 @@ export function apply(ctx: HostContext, config?: { rootDirectory?: string }): vo
         return json(res, 200, { ok: true, removed })
       },
     })
-    return () => { dispose(); disposeCleanup() }
-  }, 'timestamp-workspace: /api/timestamp-workspace/settings+cleanup')
+    return () => { dispose(); disposeCreate(); disposeCleanup() }
+  }, 'timestamp-workspace: /api/timestamp-workspace/settings+create-directory+cleanup')
 }
