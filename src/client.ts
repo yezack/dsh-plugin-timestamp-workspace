@@ -417,7 +417,15 @@ function WorkspacePickerWrapper(props: any) {
 // Wrapping all of them guarantees the button exists; HeroTempButton hides
 // every instance but the first, so the UI never shows duplicates.
 const wrappedPickerEntries = new WeakSet<object>()
-function installWorkspacePickerOverride(slots: any): void {
+let pickerSlotsRef: any = null
+let pickerRetryTimer: ReturnType<typeof setTimeout> | null = null
+let pickerListenerInstalled = false
+let pickerRetryCount = 0
+const PICKER_RETRY_MAX = 25
+
+/** Wrap every registered hero-picker entry; returns whether any was wrapped. */
+function installWorkspacePickerOverride(slots: any): boolean {
+  pickerSlotsRef = slots
   const entries = slots?.entries?.('conversation.hero.workspace') ?? []
   console.log('[timestamp-workspace] apply: conversation.hero.workspace entries =', entries.length)
   let wrapped = 0
@@ -434,6 +442,36 @@ function installWorkspacePickerOverride(slots: any): void {
     wrapped += 1
   }
   console.log('[timestamp-workspace] hero picker entries wrapped:', wrapped)
+  return wrapped > 0
+}
+
+/**
+ * The host can register the hero picker entry AFTER this plugin applies
+ * (newer hosts register ui-workspace later in the boot graph). Retry on the
+ * 'slots/changed' event and with a bounded timer so the button still appears
+ * once the entry lands; wrapping is idempotent via the WeakSet.
+ */
+function armPickerRetry(ctx: any): void {
+  if (typeof ctx?.on === 'function' && !pickerListenerInstalled) {
+    pickerListenerInstalled = true
+    try {
+      ctx.on('slots/changed', () => {
+        if (pickerSlotsRef === null) return
+        installWorkspacePickerOverride(pickerSlotsRef)
+      })
+    } catch { /* older ctx without events */ }
+  }
+  if (pickerRetryTimer !== null) return
+  const tick = (): void => {
+    pickerRetryTimer = null
+    if (pickerSlotsRef === null) return
+    const ok = installWorkspacePickerOverride(pickerSlotsRef)
+    if (!ok && pickerRetryCount < PICKER_RETRY_MAX) {
+      pickerRetryCount += 1
+      pickerRetryTimer = setTimeout(tick, 700)
+    }
+  }
+  pickerRetryTimer = setTimeout(tick, 700)
 }
 
 /**
@@ -754,7 +792,10 @@ export function apply(ctx: ClientContext, config?: Config): void {
 
   // New Session stays the host's original flow (choose a workspace). The
   // plugin only adds the hero "开启临时会话" button next to the picker chip.
+  // The host may register the picker entry after this apply (newer boot
+  // graphs), so also arm the slots/changed listener + bounded retry.
   installWorkspacePickerOverride(ctx.slots)
+  armPickerRetry(ctx)
   // Temporary (cwd-only, ungrouped) sessions have no workspace chip, so the
   // host would lock their composer; unlock exactly those sessions in place.
   installNativeComposerOverride(ctx.slots, sessions, workspaces)
