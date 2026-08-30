@@ -404,26 +404,36 @@ function HeroTempButton(props: { status: TaskStatus; onStart: () => void }) {
 
 function WorkspacePickerWrapper(props: any) {
   const status = useTaskStatus()
+  const original = props.__timestampPickerOriginal
   return React.createElement(React.Fragment, null,
     React.createElement(HeroTempButton, { status, onStart: startTemporaryTask }),
-    nativeWorkspacePickerOriginal === null ? null : React.createElement(nativeWorkspacePickerOriginal, props),
+    original === undefined ? null : React.createElement(original, props),
   )
 }
 
-// Track every entry object we have wrapped, by identity, so hot reloads and
-// re-applies never wrap the same entry twice (and never wrap a second entry
-// that the host keeps alive alongside the first).
+// Wrap EVERY live entry of the hero picker slot: the slot renderer elects
+// per-cell winners, and with several registrations (a skin, a hot-reload
+// re-registration, a second window) the rendered winner may be any of them.
+// Wrapping all of them guarantees the button exists; HeroTempButton hides
+// every instance but the first, so the UI never shows duplicates.
 const wrappedPickerEntries = new WeakSet<object>()
 function installWorkspacePickerOverride(slots: any): void {
   const entries = slots?.entries?.('conversation.hero.workspace') ?? []
   console.log('[timestamp-workspace] apply: conversation.hero.workspace entries =', entries.length)
-  const entry = entries.find((candidate: any) => typeof candidate.component === 'function' && !wrappedPickerEntries.has(candidate))
-  if (!entry) return
-  wrappedPickerEntries.add(entry)
-  nativeWorkspacePickerEntry = entry
-  nativeWorkspacePickerOriginal = entry.component
-  entry.component = (props: any) => React.createElement(WorkspacePickerWrapper, props)
-  console.log('[timestamp-workspace] hero picker entry wrapped')
+  let wrapped = 0
+  for (const candidate of entries) {
+    if (typeof candidate.component !== 'function') continue
+    if (wrappedPickerEntries.has(candidate)) continue
+    wrappedPickerEntries.add(candidate)
+    if (nativeWorkspacePickerOriginal === null) {
+      nativeWorkspacePickerEntry = candidate
+      nativeWorkspacePickerOriginal = candidate.component
+    }
+    const original = candidate.component
+    candidate.component = (props: any) => React.createElement(WorkspacePickerWrapper, { ...props, __timestampPickerOriginal: original })
+    wrapped += 1
+  }
+  console.log('[timestamp-workspace] hero picker entries wrapped:', wrapped)
 }
 
 /**
