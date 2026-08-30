@@ -421,16 +421,22 @@ let pickerSlotsRef: any = null
 let pickerRetryTimer: ReturnType<typeof setTimeout> | null = null
 let pickerListenerInstalled = false
 let pickerRetryCount = 0
+let pickerDiagnosed = false
 const PICKER_RETRY_MAX = 25
 
-/** Wrap every registered hero-picker entry; returns whether any was wrapped. */
+/**
+ * Wrap every registered hero-picker entry (idempotent via the WeakSet).
+ * Returns whether the slot is READY (has at least one function component),
+ * which stops the retry loop once the host registered the entry — NOT
+ * whether this pass wrapped anything, so the bounded retry terminates after
+ * the first successful wrap instead of spinning on wrapped: 0 forever.
+ */
 function installWorkspacePickerOverride(slots: any): boolean {
   pickerSlotsRef = slots
   const entries = slots?.entries?.('conversation.hero.workspace') ?? []
-  console.log('[timestamp-workspace] apply: conversation.hero.workspace entries =', entries.length)
+  const candidates = entries.filter((candidate: any) => typeof candidate.component === 'function')
   let wrapped = 0
-  for (const candidate of entries) {
-    if (typeof candidate.component !== 'function') continue
+  for (const candidate of candidates) {
     if (wrappedPickerEntries.has(candidate)) continue
     wrappedPickerEntries.add(candidate)
     if (nativeWorkspacePickerOriginal === null) {
@@ -441,8 +447,11 @@ function installWorkspacePickerOverride(slots: any): boolean {
     candidate.component = (props: any) => React.createElement(WorkspacePickerWrapper, { ...props, __timestampPickerOriginal: original })
     wrapped += 1
   }
-  console.log('[timestamp-workspace] hero picker entries wrapped:', wrapped)
-  return wrapped > 0
+  if (!pickerDiagnosed) {
+    pickerDiagnosed = true
+    console.log('[timestamp-workspace] hero picker entries =', entries.length, '| newly wrapped =', wrapped)
+  }
+  return candidates.length > 0
 }
 
 /**
