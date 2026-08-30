@@ -102,6 +102,53 @@ type WorkspaceService = {
   archiveSession?: (sessionId: string) => void | Promise<void>
 }
 
+// Resolved once per apply: newer hosts split directory capabilities onto
+// ctx.uiWorkspace (UiWorkspaceService) while ctx.workspaces keeps only the
+// pure Workspace controller (list / archiveSession / rename / delete...).
+// Older hosts expose everything on ctx.workspaces. The facade prefers the
+// legacy face and falls back to the uiWorkspace face, so the plugin works on
+// both generations.
+let workspacesService: WorkspaceService | undefined
+/**
+ * Resolve the live workspace face at CALL time (not apply time): the host may
+ * register ctx.uiWorkspace after this plugin applies, exactly like the hero
+ * slot. Newer hosts split directory capabilities onto ctx.uiWorkspace while
+ * ctx.workspaces keeps only the pure controller; older hosts expose everything
+ * on ctx.workspaces.
+ */
+function resolveWorkspacesFacade(_ctx: any): WorkspaceService | undefined {
+  const live = (): { ws: any; ui: any } => {
+    const c = runtime as any
+    return { ws: c?.workspaces, ui: c?.uiWorkspace }
+  }
+  const createDirectory = (root: string, name: string): Promise<string> => {
+    const { ws, ui } = live()
+    if (typeof ws?.createDirectory === 'function') return ws.createDirectory(root, name)
+    if (typeof ui?.createDirectory === 'function') return ui.createDirectory(root, name)
+    throw new Error('workspaces.createDirectory 不可用（宿主版本不兼容）')
+  }
+  const pickDirectory = (): Promise<string | null> => {
+    const { ws, ui } = live()
+    if (typeof ws?.pickDirectory === 'function') return ws.pickDirectory()
+    if (typeof ui?.pickDirectory === 'function') return ui.pickDirectory()
+    throw new Error('workspaces.pickDirectory 不可用（宿主版本不兼容）')
+  }
+  const archiveSession = (sessionId: string): void | Promise<void> => {
+    const { ws, ui } = live()
+    if (typeof ws?.archiveSession === 'function') return ws.archiveSession(sessionId)
+    if (typeof ui?.archiveSession === 'function') return ui.archiveSession(sessionId)
+    throw new Error('workspaces.archiveSession 不可用（宿主版本不兼容）')
+  }
+  const facade: Record<string, unknown> = { createDirectory, pickDirectory, archiveSession }
+  Object.defineProperty(facade, 'list', {
+    get: () => {
+      const { ws, ui } = live()
+      return ws?.list ?? ui?.workspaces?.list ?? ui?.list
+    },
+  })
+  return facade as unknown as WorkspaceService
+}
+
 async function resolveRoot(): Promise<string> {
   try {
     const settings = await withTimeout(fetchSettings(), 1500, 'settings fetch')
@@ -143,7 +190,7 @@ async function autoCreateAndStart(workspaces: WorkspaceService | undefined, sess
 function startTemporaryTask(): void {
   if (runtime === null) return
   void autoCreateAndStart(
-    runtime.workspaces as unknown as WorkspaceService | undefined,
+    workspacesService,
     runtime.sessions as unknown as SessionsService | undefined,
   )
 }
@@ -181,9 +228,9 @@ function TimestampSettingsSection(props: { close?: () => void }) {
   }
 
   const pick = async () => {
-    if (runtime === null || busy) return
+    if (busy) return
     try {
-      const picked = await runtime.workspaces.pickDirectory()
+      const picked = await workspacesService?.pickDirectory?.()
       if (picked) await persist(picked)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -504,7 +551,7 @@ export function BatchArchiveDialog(props: { workspaceId?: string | undefined; la
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  const workspaces = (runtime?.workspaces as any) ?? {}
+  const workspaces = workspacesService as any
   const sessions = (runtime?.sessions as any) ?? {}
   const sessionState = sessions?.list?.getSnapshot?.() ?? { byId: {} }
   const workspaceState = workspaces?.list?.getSnapshot?.() ?? { items: [], archivedSessionIds: [] }
@@ -801,7 +848,10 @@ function installWorkspaceBrowserOverride(slots: any): void {
 export function apply(ctx: ClientContext, config?: Config): void {
   runtime = ctx
   fallbackRoot = config?.rootDirectory ?? ''
-  const workspaces = ctx.workspaces as unknown as WorkspaceService | undefined
+  // Newer hosts split directory capabilities onto ctx.uiWorkspace; the facade
+  // keeps the rest of the plugin version-agnostic.
+  workspacesService = resolveWorkspacesFacade(ctx as any)
+  const workspaces = workspacesService
   const sessions = ctx.sessions as unknown as SessionsService | undefined
 
   // New Session stays the host's original flow (choose a workspace). The

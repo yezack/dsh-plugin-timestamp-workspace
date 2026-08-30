@@ -411,4 +411,56 @@ if (!ungroupedBody.some((node) => node === '临时任务 9') || ungroupedBody.so
 }
 sessionStore = { current: undefined, byId: {}, ids: [] }
 
-console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal (workspace and ungrouped modes) with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent')
+// --- Newer host shape: ctx.workspaces is a pure controller (no directory
+// capabilities) and ctx.uiWorkspace owns createDirectory/pickDirectory. The
+// facade must route the hero temp-task flow to uiWorkspace. ---
+let freshRegistered = null
+new Function('window', 'require', code)({ __ModuleLoader__: { load(entry) { freshRegistered = entry } } }, requireStub)
+const freshMod = freshRegistered.factory(requireStub)
+const freshRegs = []
+const freshRegistry = {
+  entries: (name) => freshRegs.filter((r) => r.desc.name === name),
+  inject: (name, factory) => { const r = factory(); if (r?.next) { for (let s = r.next(); !s.done; s = r.next()) {} } return () => {} },
+  register: (desc, component) => { freshRegs.push({ desc, component }); return () => {} },
+}
+freshRegistry.register({
+  name: 'conversation.hero.workspace',
+  children: { 'conversation.hero.workspace.directoryFlow': { kind: 'single', scope: 'root' } },
+  inject: () => ({}),
+}, () => null)
+const uiCalls = []
+const freshWorkspaces = {
+  // Pure controller: list/archiveSession only, NO createDirectory/pickDirectory.
+  list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }), subscribe: () => () => {} },
+  archiveSession: async (id) => { uiCalls.push({ controllerArchive: id }) },
+}
+const freshUiWorkspace = {
+  createDirectory: async (root, name) => { uiCalls.push({ create: { root, name } }); return `${root}/${name}` },
+  pickDirectory: async () => '/tmp/ui-root',
+  archiveSession: async (id) => { uiCalls.push({ uiArchive: id }) },
+}
+const freshSessions = {
+  create: async (opts) => { uiCalls.push({ create: opts }); return `temp:${opts.cwd}` },
+  open: async (id) => { uiCalls.push({ open: id }) },
+}
+freshMod.apply({ slots: freshRegistry, workspaces: freshWorkspaces, uiWorkspace: freshUiWorkspace, sessions: freshSessions }, { rootDirectory: '/tmp/root' })
+const freshHeroEntry = freshRegistry.entries('conversation.hero.workspace')[0]
+const freshTree = renderComponent(freshHeroEntry.component({ open: false }))
+const freshButton = freshTree.find((node) => node?.type === 'button' && node?.props?.className === 'dsh-timestamp-hero-temp-button')
+if (!freshButton) {
+  console.error('FAIL: fresh-host hero button missing')
+  process.exit(1)
+}
+freshButton.props.onClick()
+await new Promise((resolve) => setTimeout(resolve, 25))
+const created = uiCalls.find((call) => call.create && typeof call.create.root === 'string' && call.create.root === '/tmp/root')
+if (!created) {
+  console.error(`FAIL: temp task did not route createDirectory to uiWorkspace (got ${JSON.stringify(uiCalls)})`)
+  process.exit(1)
+}
+if (!uiCalls.some((call) => call.open && call.open.startsWith('temp:/tmp/root/'))) {
+  console.error('FAIL: fresh-host temp task session was not opened')
+  process.exit(1)
+}
+
+console.log('PASS: loader id OK, exports OK, apply() survives host child-slot declarations, New Session untouched (startSession intact, no directory-flow occupant), hero picker wrapped in place with the 开启临时会话 button (click creates a timestamp folder + cwd-only session + open; failures keep the view and surface the error), composer bar unlocks temporary sessions only, sidebar browser wrapped, batch archive dialog renders the host Modal (workspace and ungrouped modes) with the session list and a disabled 归档 action, settings.section registered, re-apply idempotent, fresh-host uiWorkspace facade routes createDirectory correctly')
