@@ -450,6 +450,11 @@ function installWorkspacePickerOverride(slots: any): boolean {
   if (!pickerDiagnosed) {
     pickerDiagnosed = true
     console.log('[timestamp-workspace] hero picker entries =', entries.length, '| newly wrapped =', wrapped)
+  } else if (wrapped > 0) {
+    // First pass ran before the host registered the slot; the retry /
+    // slots/changed pass just wrapped it. Log once so we can confirm the
+    // late registration was picked up.
+    console.log('[timestamp-workspace] hero picker late wrap: entries =', entries.length, '| newly wrapped =', wrapped)
   }
   return candidates.length > 0
 }
